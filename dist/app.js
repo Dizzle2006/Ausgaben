@@ -301,6 +301,7 @@ function useForecast(state) {
 function BudgetView({
   state,
   setState,
+  budgetPeriod,
   onOpenReceipt,
   onSwitchToSteuer,
   onOpenBudgetBot
@@ -460,7 +461,7 @@ function BudgetView({
     "aria-label": "Vorheriger Monat"
   }, /*#__PURE__*/React.createElement(Icon.Left, null)), /*#__PURE__*/React.createElement("div", {
     className: "label"
-  }, monthLabel(state.currentMonth)), /*#__PURE__*/React.createElement("button", {
+  }, monthLabel(state.currentMonth, budgetPeriod)), /*#__PURE__*/React.createElement("button", {
     onClick: () => setMonth(shiftMonth(state.currentMonth, 1)),
     "aria-label": "N\xE4chster Monat"
   }, /*#__PURE__*/React.createElement(Icon.Right, null))), /*#__PURE__*/React.createElement("div", {
@@ -483,7 +484,7 @@ function BudgetView({
       className: `summary ${isOverBudget ? "negative" : ""}`
     }, /*#__PURE__*/React.createElement("div", {
       className: "hero-label"
-    }, isOverNoIncome ? "Noch keine Daten" : isOverBudget ? "Budget überschritten um" : `Übrig in ${monthLabel(state.currentMonth)}`), /*#__PURE__*/React.createElement("div", {
+    }, isOverNoIncome ? "Noch keine Daten" : isOverBudget ? "Budget überschritten um" : `Übrig in ${monthLabel(state.currentMonth, budgetPeriod)}`), /*#__PURE__*/React.createElement("div", {
       className: "hero-amount"
     }, /*#__PURE__*/React.createElement("span", null, isOverBudget ? _parts.int.replace(/^−/, "") : _parts.int), _parts.cents && /*#__PURE__*/React.createElement("span", {
       className: "cents"
@@ -3328,6 +3329,48 @@ function SettingsSheet({
       l: "Invest."
     }]
   }), /*#__PURE__*/React.createElement(SettingsRow, {
+    kind: "segments",
+    title: "Abrechnungszeitraum",
+    sub: "Welcher Zeitraum als 'aktueller Monat' im Budget gilt",
+    value: tweaks.budgetPeriodMode,
+    onChange: v => setTweak("budgetPeriodMode", v),
+    options: [{
+      v: "calendar",
+      l: "Kalendermonat"
+    }, {
+      v: "custom",
+      l: "Eigener Zeitraum"
+    }]
+  }), tweaks.budgetPeriodMode === "custom" && /*#__PURE__*/React.createElement("div", {
+    className: "settings-row-block"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "settings-row-text"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "settings-row-title"
+  }, "Starttag"), /*#__PURE__*/React.createElement("div", {
+    className: "settings-row-sub"
+  }, "Zeitraum l\xE4uft vom ", tweaks.budgetPeriodStartDay, ". bis zum ", tweaks.budgetPeriodStartDay, ". des Folgemonats \u2014 z. B. ab dem Tag deines Gehaltseingangs")), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "1",
+    max: "28",
+    inputMode: "numeric",
+    value: tweaks.budgetPeriodStartDay,
+    onChange: e => {
+      const raw = Number(e.target.value);
+      const v = Number.isFinite(raw) ? Math.min(28, Math.max(1, Math.round(raw))) : 1;
+      setTweak("budgetPeriodStartDay", v);
+    },
+    style: {
+      width: 70,
+      padding: "7px 10px",
+      borderRadius: 8,
+      border: "1px solid var(--border)",
+      background: "var(--surface)",
+      color: "var(--text)",
+      fontSize: 14,
+      fontFamily: "inherit"
+    }
+  })), /*#__PURE__*/React.createElement(SettingsRow, {
     title: "Backup-Erinnerung",
     sub: "Banner anzeigen, wenn l\xE4nger nicht exportiert wurde",
     value: tweaks.backupReminder,
@@ -3698,6 +3741,10 @@ function App() {
     fontSize: 15,
     compact: false,
     startView: "budget",
+    budgetPeriodMode: "calendar",
+    // "calendar" | "custom"
+    budgetPeriodStartDay: 1,
+    // 1..28, nur bei "custom"
     backupReminder: false,
     backupIntervalWeeks: 4,
     ocrLang: "deu+eng",
@@ -4029,7 +4076,10 @@ function App() {
     className: "title-block"
   }, /*#__PURE__*/React.createElement("h1", null, "Ausgaben"), /*#__PURE__*/React.createElement("div", {
     className: "sub"
-  }, state.view === "budget" ? monthLabel(state.currentMonth) : state.view === "history" ? "Verlauf" : state.view === "tax" ? "Steuern" : "Portfolio")), /*#__PURE__*/React.createElement("div", {
+  }, state.view === "budget" ? monthLabel(state.currentMonth, {
+    mode: tweaks.budgetPeriodMode,
+    startDay: tweaks.budgetPeriodStartDay
+  }) : state.view === "history" ? "Verlauf" : state.view === "tax" ? "Steuern" : "Portfolio")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -4187,6 +4237,10 @@ function App() {
   }, budgetWarnings.length === 1 ? `Kategorie „${budgetWarnings[0].label}" hat ${Math.round(budgetWarnings[0].ratio * 100)}% des Budgets erreicht.` : `${budgetWarnings.length} Kategorien haben die Warnschwelle (${tweaks.budgetWarnPct}%) überschritten.`), state.view === "budget" && /*#__PURE__*/React.createElement(BudgetView, {
     state: state,
     setState: setState,
+    budgetPeriod: {
+      mode: tweaks.budgetPeriodMode,
+      startDay: tweaks.budgetPeriodStartDay
+    },
     onOpenReceipt: r => setSelectedReceiptId(r.id),
     onSwitchToSteuer: () => setView("tax"),
     onOpenBudgetBot: msg => {

@@ -28,8 +28,31 @@ const fmtDate = (iso) => {
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
-const monthLabel = (ym) => {
+// Liest die Budget-Perioden-Einstellung (Kalendermonat vs. eigener Zeitraum
+// ab einem festen Starttag, z.B. Gehaltseingang am 11.) aus den persistierten
+// Tweaks. Fallback: Kalendermonat.
+const _getBudgetPeriod = () => {
+  try {
+    const t = JSON.parse(localStorage.getItem("ausgaben-tweaks") || "{}");
+    const startDay = Number(t.budgetPeriodStartDay);
+    if (t.budgetPeriodMode === "custom" && startDay >= 1 && startDay <= 28) {
+      return { mode: "custom", startDay };
+    }
+  } catch {}
+  return { mode: "calendar", startDay: 1 };
+};
+
+// cfg optional: { mode: "calendar"|"custom", startDay }. Ohne cfg wird die
+// persistierte Einstellung gelesen (für Aufrufer ohne React-State-Zugriff).
+const monthLabel = (ym, cfg) => {
   const [y, m] = ym.split("-").map(Number);
+  const period = cfg || _getBudgetPeriod();
+  if (period.mode === "custom" && period.startDay > 1) {
+    const start = new Date(y, m - 1, period.startDay);
+    const end = new Date(y, m, period.startDay);
+    const dayMonth = (d) => `${d.getDate()}. ${d.toLocaleDateString("de-DE", { month: "long" })}`;
+    return `${dayMonth(start)} – ${dayMonth(end)} ${end.getFullYear()}`;
+  }
   const d = new Date(y, m - 1, 1);
   return d.toLocaleDateString("de-DE", { month: "long", year: "numeric" });
 };
@@ -40,8 +63,15 @@ const shiftMonth = (ym, delta) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
+// Liefert das YM des aktuell laufenden Budget-Zeitraums. Bei "custom" mit
+// Starttag X läuft der Zeitraum vom X. bis zum X. des Folgemonats — vor
+// dem Starttag gehört "heute" also noch zum YM des Vormonats.
 const currentYM = () => {
   const d = new Date();
+  const period = _getBudgetPeriod();
+  if (period.mode === "custom" && d.getDate() < period.startDay) {
+    d.setMonth(d.getMonth() - 1);
+  }
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 

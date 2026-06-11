@@ -235,7 +235,7 @@ function useForecast(state) {
 }
 
 // ====================== Budget View ======================
-function BudgetView({ state, setState, onOpenReceipt, onSwitchToSteuer, onOpenBudgetBot }) {
+function BudgetView({ state, setState, budgetPeriod, onOpenReceipt, onSwitchToSteuer, onOpenBudgetBot }) {
   const [openCategory, setOpenCategory] = useState(null);
   const [budgetTab, setBudgetTab] = useState("ausgaben"); // "monat" | "ausgaben" | "belege"
 
@@ -395,7 +395,7 @@ function BudgetView({ state, setState, onOpenReceipt, onSwitchToSteuer, onOpenBu
           <button onClick={() => setMonth(shiftMonth(state.currentMonth, -1))} aria-label="Vorheriger Monat">
             <Icon.Left />
           </button>
-          <div className="label">{monthLabel(state.currentMonth)}</div>
+          <div className="label">{monthLabel(state.currentMonth, budgetPeriod)}</div>
           <button onClick={() => setMonth(shiftMonth(state.currentMonth, 1))} aria-label="Nächster Monat">
             <Icon.Right />
           </button>
@@ -420,7 +420,7 @@ function BudgetView({ state, setState, onOpenReceipt, onSwitchToSteuer, onOpenBu
             <div className="hero-label">
               {isOverNoIncome ? "Noch keine Daten" :
               isOverBudget ? "Budget überschritten um" :
-              `Übrig in ${monthLabel(state.currentMonth)}`}
+              `Übrig in ${monthLabel(state.currentMonth, budgetPeriod)}`}
             </div>
 
             <div className="hero-amount">
@@ -2689,6 +2689,27 @@ function SettingsSheet({
                   <SettingsRow kind="segments" title="Starttab" sub="Ansicht beim Öffnen der App"
                 value={tweaks.startView} onChange={(v) => setTweak("startView", v)}
                 options={[{ v: "budget", l: "Budget" }, { v: "history", l: "Verlauf" }, { v: "investments", l: "Invest." }]} />
+                  <SettingsRow kind="segments" title="Abrechnungszeitraum" sub="Welcher Zeitraum als 'aktueller Monat' im Budget gilt"
+                value={tweaks.budgetPeriodMode} onChange={(v) => setTweak("budgetPeriodMode", v)}
+                options={[{ v: "calendar", l: "Kalendermonat" }, { v: "custom", l: "Eigener Zeitraum" }]} />
+                  {tweaks.budgetPeriodMode === "custom" &&
+                <div className="settings-row-block">
+                    <div className="settings-row-text">
+                      <div className="settings-row-title">Starttag</div>
+                      <div className="settings-row-sub">
+                        Zeitraum läuft vom {tweaks.budgetPeriodStartDay}. bis zum {tweaks.budgetPeriodStartDay}. des Folgemonats — z. B. ab dem Tag deines Gehaltseingangs
+                      </div>
+                    </div>
+                    <input type="number" min="1" max="28" inputMode="numeric"
+                  value={tweaks.budgetPeriodStartDay}
+                  onChange={(e) => {
+                    const raw = Number(e.target.value);
+                    const v = Number.isFinite(raw) ? Math.min(28, Math.max(1, Math.round(raw))) : 1;
+                    setTweak("budgetPeriodStartDay", v);
+                  }}
+                  style={{ width: 70, padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 14, fontFamily: "inherit" }} />
+                  </div>
+                }
                   <SettingsRow title="Backup-Erinnerung" sub="Banner anzeigen, wenn länger nicht exportiert wurde"
                 value={tweaks.backupReminder} onChange={(v) => setTweak("backupReminder", v)} />
                   {tweaks.backupReminder &&
@@ -2937,6 +2958,8 @@ function App() {
     fontSize: 15,
     compact: false,
     startView: "budget",
+    budgetPeriodMode: "calendar", // "calendar" | "custom"
+    budgetPeriodStartDay: 1, // 1..28, nur bei "custom"
     backupReminder: false,
     backupIntervalWeeks: 4,
     ocrLang: "deu+eng",
@@ -3228,7 +3251,7 @@ function App() {
         <div className="title-block">
           <h1>Ausgaben</h1>
           <div className="sub">
-            {state.view === "budget" ? monthLabel(state.currentMonth) :
+            {state.view === "budget" ? monthLabel(state.currentMonth, { mode: tweaks.budgetPeriodMode, startDay: tweaks.budgetPeriodStartDay }) :
             state.view === "history" ? "Verlauf" :
             state.view === "tax" ? "Steuern" :
             "Portfolio"}
@@ -3337,6 +3360,7 @@ function App() {
       <BudgetView
         state={state}
         setState={setState}
+        budgetPeriod={{ mode: tweaks.budgetPeriodMode, startDay: tweaks.budgetPeriodStartDay }}
         onOpenReceipt={(r) => setSelectedReceiptId(r.id)}
         onSwitchToSteuer={() => setView("tax")}
         onOpenBudgetBot={(msg) => {setBudgetBotPendingMsg(msg || null);setBudgetBotOpen(true);}} />

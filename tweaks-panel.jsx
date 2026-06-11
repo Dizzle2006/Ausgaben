@@ -159,8 +159,18 @@ const __TWEAKS_STYLE = `
 // ── useTweaks ───────────────────────────────────────────────────────────────
 // Single source of truth for tweak values. setTweak persists via the host
 // (__edit_mode_set_keys → host rewrites the EDITMODE block on disk).
+// Zusätzlich (Ausgaben Trocken): Initialwerte werden mit den in
+// localStorage["ausgaben-tweaks"] gespeicherten Präferenzen gemerged, damit
+// Einstellungen (Theme, Steuer-Profil, Budget-Periode, …) einen Reload überleben.
 function useTweaks(defaults) {
-  const [values, setValues] = React.useState(defaults);
+  const [values, setValues] = React.useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("ausgaben-tweaks") || "{}");
+      return { ...defaults, ...stored };
+    } catch {
+      return defaults;
+    }
+  });
   // Accepts either setTweak('key', value) or setTweak({ key: value, ... }) so a
   // useState-style call doesn't write a "[object Object]" key into the persisted
   // JSON block.
