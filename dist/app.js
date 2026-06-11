@@ -545,6 +545,7 @@ function BudgetView({
   })(), typeof BudgetHeatmap !== "undefined" && /*#__PURE__*/React.createElement(BudgetHeatmap, {
     state: state,
     monthYM: state.currentMonth,
+    budgetPeriod: budgetPeriod,
     monthBudget: monthData.variable.reduce((s, c) => s + (Number(c.budget) || 0), 0)
   }), budgetTab === "ausgaben" && /*#__PURE__*/React.createElement(React.Fragment, null, steuerAlert && /*#__PURE__*/React.createElement("div", {
     className: "steuer-bridge-alert",

@@ -7,33 +7,48 @@
 // Rot, wenn ein Tag das Tages-Budget (Monatsbudget / Tage) überschreitet.
 // ═══════════════════════════════════════════════════════════
 
-function BudgetHeatmap({ state, monthYM, monthBudget = 0 }) {
+function BudgetHeatmap({ state, monthYM, monthBudget = 0, budgetPeriod }) {
   const [y, m] = monthYM.split("-").map(Number);
+  const period = budgetPeriod && budgetPeriod.mode === "custom" && budgetPeriod.startDay > 1
+    ? budgetPeriod : { mode: "calendar", startDay: 1 };
+
+  // Periodenstart (z.B. 12. des Monats statt 1.) — Periodenlänge entspricht
+  // immer der Tageszahl des Startmonats, auch wenn die Periode in den
+  // Folgemonat hineinläuft.
+  const periodStart = new Date(y, m - 1, period.startDay);
+  const periodStartMs = periodStart.getTime();
   const daysInMonth = new Date(y, m, 0).getDate();
   // Erster Wochentag (Mo=0 ... So=6) — Date.getDay() liefert So=0..Sa=6
-  const firstWeekday = (new Date(y, m - 1, 1).getDay() + 6) % 7;
+  const firstWeekday = (periodStart.getDay() + 6) % 7;
   const dailyBudget = monthBudget > 0 ? monthBudget / daysInMonth : 0;
 
-  // Tagesausgaben aus variablen Kategorien aggregieren (haben Date pro Entry)
+  // Tagesausgaben aus variablen Kategorien aggregieren (haben Date pro Entry).
+  // Einträge werden über ihren Abstand (in Tagen) zum Periodenstart einsortiert,
+  // damit auch Tage aus dem Folgemonat (bei eigenem Zeitraum) korrekt landen.
   const dayTotals = React.useMemo(() => {
-    const totals = new Array(daysInMonth + 1).fill(0); // 1-indexed
+    const totals = new Array(daysInMonth).fill(0); // 0-indexiert (Offset zum Periodenstart)
     const md = state.months[monthYM];
     if (!md) return totals;
     (md.variable || []).forEach((cat) => {
       (cat.entries || []).forEach((e) => {
-        const d = (e.date || "").slice(8, 10);
-        const day = parseInt(d, 10);
-        if (day >= 1 && day <= daysInMonth) {
-          totals[day] += Number(e.amount) || 0;
+        const ds = e.date || "";
+        if (ds.length < 10) return;
+        const ey = parseInt(ds.slice(0, 4), 10);
+        const em = parseInt(ds.slice(5, 7), 10);
+        const ed = parseInt(ds.slice(8, 10), 10);
+        const entryMs = new Date(ey, em - 1, ed).getTime();
+        const offset = Math.round((entryMs - periodStartMs) / 86400000);
+        if (offset >= 0 && offset < daysInMonth) {
+          totals[offset] += Number(e.amount) || 0;
         }
       });
     });
     return totals;
-  }, [state.months, monthYM, daysInMonth]);
+  }, [state.months, monthYM, daysInMonth, periodStartMs]);
 
   // Quartil-Berechnung über nicht-leere Tage
   const { q1, q2, q3 } = React.useMemo(() => {
-    const nonZero = dayTotals.slice(1).filter((v) => v > 0).sort((a, b) => a - b);
+    const nonZero = dayTotals.filter((v) => v > 0).sort((a, b) => a - b);
     if (nonZero.length === 0) return { q1: 0, q2: 0, q3: 0 };
     const pct = (p) => nonZero[Math.floor(nonZero.length * p)] || 0;
     return { q1: pct(0.25), q2: pct(0.5), q3: pct(0.75) };
@@ -48,22 +63,25 @@ function BudgetHeatmap({ state, monthYM, monthBudget = 0 }) {
     return 3;
   };
 
-  // Heutiger Tag markieren, falls aktueller Monat
+  // Heutiger Tag markieren, falls er in den Periodenzeitraum fällt
   const today = new Date();
-  const isCurrentMonth = today.getFullYear() === y && today.getMonth() + 1 === m;
-  const todayDay = isCurrentMonth ? today.getDate() : -1;
+  const todayMs = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const todayOffset = Math.round((todayMs - periodStartMs) / 86400000);
 
-  // Grid-Daten: leading-empty Zellen, dann Tage 1..N
+  // Grid-Daten: leading-empty Zellen, dann ein Tag pro Periodentag (Datum
+  // ergibt sich aus Periodenstart + Offset, kann also in den Folgemonat
+  // hineinlaufen)
   const cells = [];
   for (let i = 0; i < firstWeekday; i++) cells.push({ type: "empty", key: `e${i}` });
-  for (let d = 1; d <= daysInMonth; d++) {
+  for (let offset = 0; offset < daysInMonth; offset++) {
+    const cellDate = new Date(periodStartMs + offset * 86400000);
     cells.push({
       type: "day",
-      key: `d${d}`,
-      day: d,
-      amount: dayTotals[d],
-      level: intensity(dayTotals[d]),
-      isToday: d === todayDay,
+      key: `d${offset}`,
+      day: cellDate.getDate(),
+      amount: dayTotals[offset],
+      level: intensity(dayTotals[offset]),
+      isToday: offset === todayOffset,
     });
   }
 
@@ -89,7 +107,7 @@ function BudgetHeatmap({ state, monthYM, monthBudget = 0 }) {
         ))}
       </div>
 
-      <div className="heatmap-grid" role="grid" aria-label={`Tagesausgaben ${monthLabel(monthYM)}`}>
+      <div className="heatmap-grid" role="grid" aria-label={`Tagesausgaben ${monthLabel(monthYM, period)}`}>
         {cells.map((c) =>
           c.type === "empty" ? (
             <span key={c.key} className="heatmap-cell empty" />
