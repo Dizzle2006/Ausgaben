@@ -187,6 +187,161 @@ function _getLast3Months(state) {
   }
   return result;
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// BUDGET-METHODEN — Presets für die automatische Budget-Verteilung
+// ════════════════════════════════════════════════════════════════════════
+const BUDGET_METHODEN = [{
+  key: "50_30_20",
+  titel: "50/30/20-Regel",
+  empfohlen: true,
+  fixPct: 50,
+  varPct: 30,
+  sparPct: 20,
+  beschreibung: "Der Klassiker: 50% Bedürfnisse (Fixkosten & Grundbedarf), 30% Wünsche (variable Ausgaben), 20% Sparen."
+}, {
+  key: "6_konten",
+  titel: "6-Konten-Modell (Jars)",
+  fixPct: 55,
+  varPct: 20,
+  sparPct: 25,
+  beschreibung: "Nach T. Harv Eker: 55% Notwendiges, 20% Spaß & Bildung (variable Ausgaben), 25% verteilt auf Sparen, langfristige Anlagen und Spenden."
+}, {
+  key: "70_20_10",
+  titel: "70/20/10-Regel",
+  fixPct: 50,
+  varPct: 20,
+  sparPct: 30,
+  beschreibung: "Für ambitionierte Sparer: 70% Lebensunterhalt (Fixkosten + Variable), 20% sparen/investieren, 10% extra sparen oder Schulden tilgen."
+}, {
+  key: "zero_based",
+  titel: "Zero-Based Budgeting",
+  fixPct: null,
+  varPct: null,
+  sparPct: null,
+  beschreibung: "Jeder Euro bekommt eine Aufgabe: Variable-Budget = Einkommen − tatsächliche Fixkosten − Sparziel. Nichts bleibt ungeplant."
+}, {
+  key: "eigene",
+  titel: "Eigene Aufteilung",
+  fixPct: null,
+  varPct: null,
+  sparPct: null,
+  beschreibung: "Du legst selbst fest, wie viel Prozent deines Einkommens für variable Ausgaben zur Verfügung stehen soll."
+}, {
+  key: "manuell",
+  titel: "Manuell",
+  fixPct: null,
+  varPct: null,
+  sparPct: null,
+  beschreibung: "Du setzt alle Kategorie-Budgets selbst – BudgetBot überwacht sie nur und warnt bei Überschreitung."
+}];
+function getBudgetMethode(key) {
+  return BUDGET_METHODEN.find(m => m.key === key) || BUDGET_METHODEN[0];
+}
+
+// Berechnet den Gesamtbetrag, der laut gewählter Methode auf die variablen
+// Ausgabenkategorien verteilt werden soll. null = kein automatischer
+// Vorschlag möglich (z.B. "manuell" oder fehlende Eingaben).
+function computeVariablePool(methodKey, totals, profil) {
+  const income = Math.max(totals?.income || 0, profil?.nettoEinkommen || 0);
+  if (income <= 0) return null;
+  switch (methodKey) {
+    case "manuell":
+      return null;
+    case "zero_based":
+      {
+        const fixActual = totals?.fixed || 0;
+        const sparZiel = profil?.sparZielMonatlich || 0;
+        return Math.max(0, Math.round(income - fixActual - sparZiel));
+      }
+    case "eigene":
+      {
+        const pct = Math.min(100, Math.max(0, Number(profil?.eigeneVarPct) || 0));
+        return pct > 0 ? Math.round(income * pct / 100) : null;
+      }
+    default:
+      {
+        const m = getBudgetMethode(methodKey);
+        if (m.varPct == null) return null;
+        return Math.round(income * m.varPct / 100);
+      }
+  }
+}
+
+// Verteilt den Topf proportional zu den Ausgaben jeder Kategorie (aktueller
+// Monat + Historie). Ohne Ausgabenhistorie gleichmäßig auf alle Kategorien.
+function distributeVariableBudget(monthData, history, variableTotal) {
+  const cats = monthData.variable || [];
+  if (cats.length === 0 || !(variableTotal > 0)) return {};
+  const weights = cats.map(cat => {
+    const spentNow = _getCatSpent(monthData, cat.id);
+    const spentHist = history.reduce((s, h) => {
+      const hc = h.cats.find(c => c.id === cat.id);
+      return s + (hc ? hc.spent : 0);
+    }, 0);
+    return spentNow + spentHist;
+  });
+  const totalWeight = weights.reduce((s, w) => s + w, 0);
+  const result = {};
+  if (totalWeight > 0) {
+    cats.forEach((cat, i) => {
+      result[cat.id] = Math.round(variableTotal * weights[i] / totalWeight);
+    });
+  } else {
+    const equal = Math.round(variableTotal / cats.length);
+    cats.forEach(cat => {
+      result[cat.id] = equal;
+    });
+  }
+  return result;
+}
+
+// Berechnet den Budget-Vorschlag für die variablen Kategorien des aktuellen
+// Monats, ohne den State zu verändern (für Vorschau in Wizard/Chat).
+function previewBudgetVorschlag(monthData, history, totals, profil, methodKey) {
+  if (!monthData || !totals) return null;
+  const variableTotal = computeVariablePool(methodKey, totals, profil);
+  if (variableTotal == null) return null;
+  const budgets = distributeVariableBudget(monthData, history, variableTotal);
+  const cats = (monthData.variable || []).map(cat => ({
+    id: cat.id,
+    label: cat.label,
+    vorschlag: budgets[cat.id] || 0
+  }));
+  return {
+    variableTotal,
+    cats
+  };
+}
+
+// Wendet den Budget-Vorschlag auf die Kategorie-Limits des aktuellen Monats an.
+function applyBudgetVorschlag(state, setState, profil, methodKey) {
+  const ctx = buildBudgetContext(state, profil);
+  const preview = previewBudgetVorschlag(ctx.monthData, ctx.history, ctx.totals, profil, methodKey);
+  if (!preview || preview.cats.length === 0) return null;
+  setState(s => {
+    const md = s.months[s.currentMonth];
+    if (!md) return s;
+    const updatedVariable = (md.variable || []).map(cat => {
+      const found = preview.cats.find(c => c.id === cat.id);
+      return found ? {
+        ...cat,
+        budget: found.vorschlag
+      } : cat;
+    });
+    return {
+      ...s,
+      months: {
+        ...s.months,
+        [s.currentMonth]: {
+          ...md,
+          variable: updatedVariable
+        }
+      }
+    };
+  });
+  return preview;
+}
 function computeBudgetAlerts(state, profil) {
   const alerts = [];
   const monthData = state.months?.[state.currentMonth];
@@ -432,8 +587,11 @@ const _BUDGET_INTENTS = [{
   key: "notgroschen",
   re: /notgroschen|notfallfonds|emergency.*fund|absicherung|sicherheit.*geld|puffer|sicherheitsnetz/i
 }, {
-  key: "50_30_20",
-  re: /50.?30.?20|budgetregel|budgetmethode|wie\s+teile.*ein|budget.*aufteilen|aufteilung.*budget/i
+  key: "vorschlag_uebernehmen",
+  re: /vorschlag.*(übernehm|anwenden|umsetzen)|budgets?.*(jetzt\s*)?(übernehmen|anwenden)|wende.*vorschlag.*an/i
+}, {
+  key: "budgetmethode",
+  re: /50.?30.?20|6.?konten|jars?|70.?20.?10|zero.?based|budgetregel|budgetmethode|spar.?methode|wie\s+teile.*ein|budget.*aufteilen|aufteilung.*budget/i
 }, {
   key: "ziel_check",
   re: /ziel.*status|wie\s+weit.*ziel|fortschritt.*ziel|ziel.*erreich|wann.*ziel|sparziel.*fortschritt/i
@@ -565,6 +723,7 @@ function deterministicBudgetAntwort(input, ctx) {
   const intent = detectBudgetIntent(input);
   const {
     profil,
+    monthData,
     totals,
     cats,
     history,
@@ -587,6 +746,7 @@ Ich bin rein deterministisch – kein KI, kein Internet, keine Datenweitergabe. 
 - Notgroschen: Wie viel Rücklage brauche ich?
 - Prognose: Was bleibt bis Monatsende übrig?
 - Bedarfsanalyse: Finanzprofil einrichten
+- Budgetmethode: 50/30/20, 6-Konten, 70/20/10, Zero-Based, Eigene – inkl. Vorschlag zum Übernehmen
 
 **Probier z.B.:**
 - "Wie sieht mein Budget aus?"
@@ -815,28 +975,44 @@ ${monatsausgaben > 0 ? `Bei deinen monatlichen Ausgaben von ${fmtEUR(monatsausga
 
 Der Notgroschen ist keine Geldanlage – er ist Sicherheit. Erst wenn er steht, lohnt sich Investieren.`;
       }
-    case "50_30_20":
+    case "budgetmethode":
       {
-        const inc = totals?.income || 0;
-        const n50 = inc ? Math.round(inc * 0.5) : 0;
-        const n30 = inc ? Math.round(inc * 0.3) : 0;
-        const n20 = inc ? Math.round(inc * 0.2) : 0;
-        return `**Die 50/30/20-Budgetregel**
+        const inc = Math.max(totals?.income || 0, profil?.nettoEinkommen || 0);
+        const methodKey = profil?.methode || "50_30_20";
+        const methode = getBudgetMethode(methodKey);
+        const preview = previewBudgetVorschlag(monthData, history, totals, profil, methodKey);
+        let aufteilung = "";
+        if (methode.varPct != null) {
+          aufteilung = `\n    ${methode.fixPct}% → Fixkosten/Bedürfnisse  ${inc ? `= ${fmtEUR(inc * methode.fixPct / 100)}/Monat` : ""}
+    ${methode.varPct}% → Variable Ausgaben     ${inc ? `= ${fmtEUR(inc * methode.varPct / 100)}/Monat` : ""}
+    ${methode.sparPct}% → Sparen                ${inc ? `= ${fmtEUR(inc * methode.sparPct / 100)}/Monat` : ""}\n`;
+        } else if (methodKey === "zero_based" && totals) {
+          const variableTotal = computeVariablePool(methodKey, totals, profil);
+          aufteilung = `\n    ${fmtEUR(inc)} Einkommen − ${fmtEUR(totals.fixed)} Fixkosten − ${fmtEUR(profil?.sparZielMonatlich || 0)} Sparziel
+    = ${fmtEUR(variableTotal || 0)} für variable Kategorien\n`;
+        } else if (methodKey === "eigene" && inc > 0 && profil?.eigeneVarPct) {
+          aufteilung = `\n    ${profil.eigeneVarPct}% von ${fmtEUR(inc)} = ${fmtEUR(inc * profil.eigeneVarPct / 100)}/Monat für variable Kategorien\n`;
+        }
+        let vorschlagBlock = "";
+        if (preview && preview.cats.length > 0) {
+          vorschlagBlock = `\n**Vorschlag für deine Kategorien** (${fmtEUR(preview.variableTotal)} gesamt):\n` + preview.cats.map(c => `  • ${c.label}: ${fmtEUR(c.vorschlag)}`).join("\n") + `\n\nSchreib **"Vorschlag übernehmen"**, um diese Budgets jetzt in deine Kategorien zu übernehmen.`;
+        }
+        const alleMethoden = BUDGET_METHODEN.map(m => `- **${m.titel}**${m.key === methodKey ? " ← aktuell gewählt" : ""}: ${m.beschreibung}`).join("\n");
+        return `**Deine Budgetmethode: ${methode.titel}**
 
-Eine einfache, bewährte Methode:
+${methode.beschreibung}
+${aufteilung}${vorschlagBlock}
 
-    50% → Bedürfnisse  ${inc ? `= ${fmtEUR(n50)}/Monat` : ""}
-    30% → Wünsche      ${inc ? `= ${fmtEUR(n30)}/Monat` : ""}
-    20% → Sparen       ${inc ? `= ${fmtEUR(n20)}/Monat` : ""}
+**Verfügbare Methoden:**
+${alleMethoden}
 
-**Was gehört wohin?**
-- **Bedürfnisse (50%):** Miete, Strom, Lebensmittel, Versicherungen, Transport
-- **Wünsche (30%):** Restaurants, Kleidung, Urlaub, Unterhaltung, Hobbys
-- **Sparen (20%):** Notgroschen, Altersvorsorge, Ziele, Investitionen
-
-**Anpassung:** Wer hohe Fixkosten hat (z.B. teure Miete), kann 60/20/20 verwenden. Wichtig ist, dass Sparen einen festen Platz bekommt.
-
-${inc > 0 ? "Richte dein Finanzprofil ein, um diese Aufteilung auf deine Kategorien anzuwenden." : "Trage dein Einkommen ein für eine konkrete Berechnung."}`;
+Ändere die Methode über "Profil bearbeiten" → Schritt "Methode".${inc === 0 ? "\n\nTrage dein Einkommen ein für eine konkrete Berechnung." : ""}`;
+      }
+    case "vorschlag_uebernehmen":
+      {
+        // Wird normalerweise schon vor deterministicBudgetAntwort abgefangen
+        // (benötigt setState) – hier nur als textueller Fallback.
+        return `Um einen Budget-Vorschlag zu übernehmen, öffne dein **Finanzprofil** ("Profil bearbeiten") und aktiviere die Übernahme im letzten Schritt, oder tippe **"Vorschlag übernehmen"** direkt im Chat.`;
       }
     case "ziel_check":
       {
@@ -964,7 +1140,7 @@ ${daysLeft > 0 ? `Noch ${daysLeft} Tage – Tageslimit für Budget-Einhaltung: $
     Nettoeinkommen:    ${profil.nettoEinkommen ? fmtEUR(profil.nettoEinkommen) : "nicht erfasst"}
     Sparziel/Monat:    ${profil.sparZielMonatlich ? fmtEUR(profil.sparZielMonatlich) : "nicht gesetzt"}
     Notgroschen-Ziel:  ${profil.notgroschenZiel ? fmtEUR(profil.notgroschenZiel) : "nicht gesetzt"}
-    Budgetmethode:     ${profil.methode === "50_30_20" ? "50/30/20-Regel" : "Manuell"}
+    Budgetmethode:     ${getBudgetMethode(profil.methode).titel}
     Letzte Änderung:   ${profil.aktualisiert ? new Date(profil.aktualisiert).toLocaleDateString("de-DE") : "—"}
 
 Klicke auf "Profil bearbeiten" oben im Chat, um dein Profil anzupassen.` : `Du hast noch kein Finanzprofil. Klicke oben auf **"Finanzprofil einrichten"** und gib Einkommen, Sparziel und Ziele ein.`;
@@ -1187,7 +1363,7 @@ function BudgetTypingIndicator() {
 function BudgetSuggestions({
   onPick
 }) {
-  const chips = ["Wie sieht mein Budget aus?", "Wo kann ich sparen?", "Wie weit bin ich mit meinem Sparziel?", "Was mache ich mit dem Überschuss?", "Sind meine Fixkosten zu hoch?"];
+  const chips = ["Wie sieht mein Budget aus?", "Wo kann ich sparen?", "Wie weit bin ich mit meinem Sparziel?", "Was mache ich mit dem Überschuss?", "Sind meine Fixkosten zu hoch?", "Welche Budgetmethode passt zu mir?"];
   return /*#__PURE__*/React.createElement("div", {
     className: "bot-suggestions"
   }, /*#__PURE__*/React.createElement("div", {
@@ -1207,7 +1383,9 @@ function BudgetSuggestions({
 function BedarfsanalyseWizard({
   profilInit,
   onSave,
-  onCancel
+  onCancel,
+  state,
+  setState
 }) {
   const [step, setStep] = React.useState(0);
   const [form, setForm] = React.useState({
@@ -1217,7 +1395,9 @@ function BedarfsanalyseWizard({
     sparZielProzent: profilInit?.sparZielProzent || 20,
     notgroschenZiel: profilInit?.notgroschenZiel || 0,
     methode: profilInit?.methode || "50_30_20",
-    finanzielleZiele: profilInit?.finanzielleZiele || []
+    eigeneVarPct: profilInit?.eigeneVarPct || 30,
+    finanzielleZiele: profilInit?.finanzielleZiele || [],
+    vorschlagUebernehmen: true
   });
   const [neuesZiel, setNeuesZiel] = React.useState({
     label: "",
@@ -1252,12 +1432,19 @@ function BedarfsanalyseWizard({
   }, []);
   const handleSave = async () => {
     setSaving(true);
+    const {
+      vorschlagUebernehmen,
+      ...formFields
+    } = form;
     const profil = {
-      ...form,
+      ...formFields,
       sparZielMonatlich: sparZielAbsolut,
       erstellt: profilInit?.erstellt || Date.now()
     };
     await saveBedarfsanalyse(profil);
+    if (vorschlagUebernehmen && form.methode !== "manuell" && state && typeof setState === "function") {
+      applyBudgetVorschlag(state, setState, profil, form.methode);
+    }
     if (!_wizardMounted.current) return;
     setSaving(false);
     onSave(profil);
@@ -1610,84 +1797,151 @@ function BedarfsanalyseWizard({
       cursor: neuesZiel.label ? "pointer" : "default",
       fontFamily: "inherit"
     }
-  }, "+ Ziel hinzuf\xFCgen"))), step === 3 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 20,
-      marginBottom: 8
-    }
-  }, "\uD83D\uDCD0"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 700,
-      fontSize: 17,
-      marginBottom: 6
-    }
-  }, "Budgetmethode"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      color: "var(--text-muted)",
-      marginBottom: 18,
-      lineHeight: 1.5
-    }
-  }, "Wie soll BudgetBot deine Kategorien bewerten?"), [{
-    key: "50_30_20",
-    titel: "50/30/20 Regel",
-    empfohlen: true,
-    beschreibung: `50% Bedürfnisse · 30% Wünsche · 20% Sparen${form.nettoEinkommen > 0 ? `\n→ ${fmtEUR(form.nettoEinkommen * 0.5)} / ${fmtEUR(form.nettoEinkommen * 0.3)} / ${fmtEUR(sparZielAbsolut || form.nettoEinkommen * 0.2)}` : ""}`
-  }, {
-    key: "manuell",
-    titel: "Manuell",
-    empfohlen: false,
-    beschreibung: "Du setzt Budgets pro Kategorie selbst – BudgetBot überwacht sie."
-  }].map(opt => /*#__PURE__*/React.createElement("div", {
-    key: opt.key,
-    onClick: () => patch("methode", opt.key),
-    style: {
-      padding: "14px 16px",
-      borderRadius: 14,
-      marginBottom: 10,
-      cursor: "pointer",
-      border: `2px solid ${form.methode === opt.key ? "var(--accent)" : "var(--border)"}`,
-      background: form.methode === opt.key ? "oklch(from var(--accent) l c h / 0.07)" : "var(--surface)",
-      transition: "all 0.15s"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-      marginBottom: 4
-    }
-  }, /*#__PURE__*/React.createElement("strong", {
-    style: {
-      fontSize: 14,
-      color: form.methode === opt.key ? "var(--accent)" : "var(--text)"
-    }
-  }, opt.titel), opt.empfohlen && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 10,
-      background: "var(--accent)",
-      color: "#fff",
-      padding: "1px 7px",
-      borderRadius: 99,
-      fontWeight: 700
-    }
-  }, "Empfohlen")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      color: "var(--text-muted)",
-      lineHeight: 1.5,
-      whiteSpace: "pre-line"
-    }
-  }, opt.beschreibung))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 16,
-      padding: "12px 16px",
-      background: "var(--surface-2)",
-      borderRadius: 12,
-      fontSize: 13,
-      lineHeight: 1.6
-    }
-  }, /*#__PURE__*/React.createElement("strong", null, "Zusammenfassung:"), /*#__PURE__*/React.createElement("br", null), "Einkommen: ", form.nettoEinkommen ? fmtEUR(form.nettoEinkommen) : "nicht gesetzt", /*#__PURE__*/React.createElement("br", null), "Sparziel: ", sparZielAbsolut ? fmtEUR(sparZielAbsolut) + "/Monat" : "nicht gesetzt", /*#__PURE__*/React.createElement("br", null), "Notgroschen: ", form.notgroschenZiel ? fmtEUR(form.notgroschenZiel) : "nicht gesetzt", /*#__PURE__*/React.createElement("br", null), "Ziele: ", form.finanzielleZiele.length > 0 ? form.finanzielleZiele.map(z => z.label).join(", ") : "keine"))), /*#__PURE__*/React.createElement("div", {
+  }, "+ Ziel hinzuf\xFCgen"))), step === 3 && (() => {
+    const draftProfil = {
+      ...form,
+      sparZielMonatlich: sparZielAbsolut
+    };
+    const ctx = state ? buildBudgetContext(state, draftProfil) : null;
+    const incomeForCalc = Math.max(ctx?.totals?.income || 0, form.nettoEinkommen || 0);
+    const preview = ctx?.monthData ? previewBudgetVorschlag(ctx.monthData, ctx.history, ctx.totals, draftProfil, form.methode) : null;
+    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        marginBottom: 8
+      }
+    }, "\uD83D\uDCD0"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 17,
+        marginBottom: 6
+      }
+    }, "Budgetmethode"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        color: "var(--text-muted)",
+        marginBottom: 18,
+        lineHeight: 1.5
+      }
+    }, "Wie soll BudgetBot deine variablen Kategorien einteilen?"), BUDGET_METHODEN.map(opt => /*#__PURE__*/React.createElement("div", {
+      key: opt.key,
+      onClick: () => patch("methode", opt.key),
+      style: {
+        padding: "14px 16px",
+        borderRadius: 14,
+        marginBottom: 10,
+        cursor: "pointer",
+        border: `2px solid ${form.methode === opt.key ? "var(--accent)" : "var(--border)"}`,
+        background: form.methode === opt.key ? "oklch(from var(--accent) l c h / 0.07)" : "var(--surface)",
+        transition: "all 0.15s"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginBottom: 4
+      }
+    }, /*#__PURE__*/React.createElement("strong", {
+      style: {
+        fontSize: 14,
+        color: form.methode === opt.key ? "var(--accent)" : "var(--text)"
+      }
+    }, opt.titel), opt.empfohlen && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        background: "var(--accent)",
+        color: "#fff",
+        padding: "1px 7px",
+        borderRadius: 99,
+        fontWeight: 700
+      }
+    }, "Empfohlen")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: "var(--text-muted)",
+        lineHeight: 1.5
+      }
+    }, opt.beschreibung), opt.varPct != null && incomeForCalc > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 6,
+        fontSize: 12,
+        color: "var(--accent)"
+      }
+    }, "\u2192 ", fmtEUR(incomeForCalc * opt.fixPct / 100), " Fix \xB7 ", fmtEUR(incomeForCalc * opt.varPct / 100), " Variabel \xB7 ", fmtEUR(incomeForCalc * opt.sparPct / 100), " Sparen"))), form.methode === "eigene" && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 6,
+        marginBottom: 10
+      }
+    }, /*#__PURE__*/React.createElement("label", {
+      style: labelStyle
+    }, "Anteil f\xFCr variable Ausgaben (%)"), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      max: "100",
+      step: "5",
+      value: form.eigeneVarPct || "",
+      onChange: e => patch("eigeneVarPct", Number(e.target.value)),
+      style: inputStyle
+    }), incomeForCalc > 0 && form.eigeneVarPct > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 8,
+        fontSize: 12,
+        color: "var(--text-muted)"
+      }
+    }, "= ", fmtEUR(incomeForCalc * form.eigeneVarPct / 100), "/Monat f\xFCr variable Kategorien")), form.methode === "zero_based" && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 6,
+        marginBottom: 10,
+        fontSize: 12.5,
+        color: "var(--text-muted)",
+        lineHeight: 1.5
+      }
+    }, ctx?.totals ? `${fmtEUR(incomeForCalc)} Einkommen − ${fmtEUR(ctx.totals.fixed)} Fixkosten − ${fmtEUR(sparZielAbsolut)} Sparziel = ${fmtEUR(Math.max(0, incomeForCalc - ctx.totals.fixed - sparZielAbsolut))} für variable Kategorien` : "Trage Einkommen, Fixkosten und Sparziel ein für eine Berechnung."), preview && preview.cats.length > 0 && form.methode !== "manuell" && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 12,
+        padding: "12px 16px",
+        background: "var(--surface-2)",
+        borderRadius: 12
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 13,
+        marginBottom: 8
+      }
+    }, "Budget-Vorschlag f\xFCr deine Kategorien (Gesamt: ", fmtEUR(preview.variableTotal), ")"), preview.cats.map(c => /*#__PURE__*/React.createElement("div", {
+      key: c.id,
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 12.5,
+        padding: "3px 0"
+      }
+    }, /*#__PURE__*/React.createElement("span", null, c.label), /*#__PURE__*/React.createElement("span", null, fmtEUR(c.vorschlag)))), /*#__PURE__*/React.createElement("label", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 10,
+        fontSize: 12.5,
+        cursor: "pointer"
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: form.vorschlagUebernehmen,
+      onChange: e => patch("vorschlagUebernehmen", e.target.checked)
+    }), "Diese Budgets beim Speichern in meine Kategorien \xFCbernehmen")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 16,
+        padding: "12px 16px",
+        background: "var(--surface-2)",
+        borderRadius: 12,
+        fontSize: 13,
+        lineHeight: 1.6
+      }
+    }, /*#__PURE__*/React.createElement("strong", null, "Zusammenfassung:"), /*#__PURE__*/React.createElement("br", null), "Einkommen: ", form.nettoEinkommen ? fmtEUR(form.nettoEinkommen) : "nicht gesetzt", /*#__PURE__*/React.createElement("br", null), "Sparziel: ", sparZielAbsolut ? fmtEUR(sparZielAbsolut) + "/Monat" : "nicht gesetzt", /*#__PURE__*/React.createElement("br", null), "Notgroschen: ", form.notgroschenZiel ? fmtEUR(form.notgroschenZiel) : "nicht gesetzt", /*#__PURE__*/React.createElement("br", null), "Ziele: ", form.finanzielleZiele.length > 0 ? form.finanzielleZiele.map(z => z.label).join(", ") : "keine"));
+  })()), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "12px 18px 18px",
       display: "flex",
@@ -2192,6 +2446,7 @@ function BudgetBotModal({
   open,
   onClose,
   state,
+  setState,
   pendingMessage,
   onPendingMessageSent
 }) {
@@ -2203,7 +2458,7 @@ function BudgetBotModal({
   const activeIdRef = React.useRef(null);
   const _setActiveId = id => {
     activeIdRef.current = id;
-    _setActiveId(id);
+    setActiveId(id);
   };
   const [messages, setMessages] = React.useState([]);
   const [draft, setDraft] = React.useState("");
@@ -2324,6 +2579,33 @@ function BudgetBotModal({
     const ctx = buildBudgetContext(state, profil);
     let antwort = "";
 
+    // ── Vorschlag übernehmen — direkte Aktion, kein KI-Aufruf ────────
+    if (detectBudgetIntent(txt) === "vorschlag_uebernehmen") {
+      const methodKey = profil?.methode || "50_30_20";
+      if (typeof setState !== "function") {
+        antwort = "Diese Aktion ist hier leider nicht verfügbar.";
+      } else if (methodKey === "manuell") {
+        antwort = `Deine Budgetmethode ist aktuell **Manuell** – dafür gibt es keinen automatischen Vorschlag. Wechsle die Methode über "Profil bearbeiten" → Schritt "Methode".`;
+      } else {
+        const result = applyBudgetVorschlag(state, setState, profil, methodKey);
+        if (!result || result.cats.length === 0) {
+          antwort = "Ich konnte keinen Vorschlag berechnen – trage zuerst dein Einkommen (Profil oder im aktuellen Monat) und mindestens eine variable Kategorie ein.";
+        } else {
+          antwort = `**Budgets übernommen** (${getBudgetMethode(methodKey).titel}):\n\n` + result.cats.map(c => `  • ${c.label}: ${fmtEUR(c.vorschlag)}`).join("\n") + `\n\nGesamt: ${fmtEUR(result.variableTotal)}. Du kannst die Werte jederzeit pro Kategorie anpassen.`;
+        }
+      }
+      const botMsg = {
+        role: "assistant",
+        content: antwort,
+        ts: botTs
+      };
+      const final = [...after, botMsg];
+      setMessages(final);
+      setBusy(false);
+      await _persistMessages(activeIdRef.current || activeId, final);
+      return;
+    }
+
     // ── Ollama Streaming (wenn konfiguriert) ─────────────────────────
     const cfg = typeof window.getOllamaConfig === "function" ? window.getOllamaConfig() : {};
     if (cfg.model && typeof window.ollamaStream === "function") {
@@ -2385,7 +2667,9 @@ function BudgetBotModal({
     }, /*#__PURE__*/React.createElement(BedarfsanalyseWizard, {
       profilInit: profil,
       onSave: handleProfilSaved,
-      onCancel: () => setWizardOpen(false)
+      onCancel: () => setWizardOpen(false),
+      state: state,
+      setState: setState
     })));
   }
   return /*#__PURE__*/React.createElement("div", {

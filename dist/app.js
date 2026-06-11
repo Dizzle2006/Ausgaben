@@ -4335,6 +4335,7 @@ function App() {
       setBudgetBotPendingMsg(null);
     },
     state: state,
+    setState: setState,
     pendingMessage: budgetBotPendingMsg,
     onPendingMessageSent: () => setBudgetBotPendingMsg(null)
   }), state.view === "tax" && typeof SteuerBotModal !== "undefined" && /*#__PURE__*/React.createElement("button", {

@@ -3453,6 +3453,7 @@ function App() {
         open={budgetBotOpen}
         onClose={() => {setBudgetBotOpen(false);setBudgetBotPendingMsg(null);}}
         state={state}
+        setState={setState}
         pendingMessage={budgetBotPendingMsg}
         onPendingMessageSent={() => setBudgetBotPendingMsg(null)} />
 
