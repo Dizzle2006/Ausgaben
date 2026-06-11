@@ -60,15 +60,7 @@
   <script src="tax-optimizer.js"></script>
   <script src="app.js"></script>
 
-  <!-- PWA service worker registration -->
-  <script>
-    if ("serviceWorker" in navigator && location.protocol !== "file:") {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker
-          .register("service-worker.js")
-          .catch((err) => console.warn("SW registration failed:", err));
-      });
-    }
-  </script>
+  <!-- PWA service worker registration (externes File — kein inline script für CSP) -->
+  <script src="register-sw.js"></script>
 </body>
 </html>
