@@ -77,3 +77,70 @@ bleiben deshalb bewusst erhalten.
 1. Vorsorgeaufwand-Höchstbetragsrechnung (§ 10 Abs. 4) in calcBruttoNetto verfeinern
 2. Verpflegungsmehraufwand-Rechner (14 €/28 €) als eigener Intent mit Slot „Reisetage"
 3. Unit-Test-Datei (`tests/engine.test.js`) ins Repo aufnehmen — Testfälle aus diesem Audit
+
+---
+
+# Verbesserungen v2.2.0 (11. Juni 2026) — „KI-Level“-Ausbau
+
+## 1. Strukturierte Wissensdatenbank (`_WISSEN`) + Kompositions-Engine
+Kern der Anforderung „Wissensdatenbank, die wie eine KI interpretiert wird“:
+- **17 deklarative Wissens-Einträge** (Pendlerpauschale, Grundfreibetrag, Abgeltungsteuer,
+  FSA, Teilfreistellung, Vorabpauschale, Günstigerprüfung, Riester, Rürup, bAV,
+  zumutbare Eigenbelastung, §35a, GWG, AfA, Progressionsvorbehalt, Fünftelregelung,
+  Progression, Dienstwagen) mit Schema: Definition · Funktionsweise · Werte ·
+  Voraussetzungen · lohnt/lohnt-nicht · Beispiel · Eintrag (ELSTER) · Fallstricke ·
+  situationsspezifische Fakten (Student/Azubi/selbständig/verheiratet/Rentner/Minijob) ·
+  verwandte Konzepte.
+- **Kompositions-Engine `_kbAntwort()`**: interpretiert die Einträge zur Laufzeit nach
+  Fragetyp × Situation × Profil. „Was ist X?“, „Lohnt sich X?“, „Wo trage ich X ein?“,
+  „Gilt X für mich als Student?“ → jeweils individuell komponierte Antwort aus
+  denselben Fakten. Profil fließt ein (persönlicher Grenzsteuersatz pro Antwort).
+- **Alle Beträge als {token}** → live aus `tax-config.json` aufgelöst. Neue Konzepte =
+  ein Datensatz, kein neuer Code. Kollisions-Auflösung: spezifische KB-Konzepte
+  schlagen generische Muster.
+
+## 2. Statistischer Intent-Klassifikator (Stufe 2.5) — „Mini-ML“
+- Zeichen-Trigramm-Vektorisierung + Kosinus-Ähnlichkeit gegen vortrainierte
+  Zentroide aus **~240 Trainings-Paraphrasen** über 27 Themen (fastText-Prinzip,
+  komplett offline, deterministisch).
+- Versteht beliebige Formulierungen: „was kommt bei mir aufs konto“ → Brutto-Netto
+  (sim 0,39), robust gegen Flexion/Wortstellung/Tippfehler.
+- **Konfidenz-Logik wie eine KI**: sicher → antworten · unsicher → **Rückfrage**
+  („1️⃣ Brutto-Netto oder 2️⃣ Doppelte Haushaltsführung?“) · Antwort „1“/„2“/Themenname
+  ODER ein eindeutiger Wert („60k“ → Brutto-Netto) löst die Wahl auf.
+
+## 3. Aktives Slot-Filling (Gegenfragen)
+- Fehlt ein Pflichtwert (km/HO-Tage/Brutto), fragt der Bot konkret nach statt aufs
+  Interview zu verweisen; die nächste Nachricht („ungefähr 47.000“) füllt den Wert
+  und löst die Berechnung aus. Themenwechsel bricht die Erwartung sauber ab.
+
+## 4. Optimierungs-Algorithmus v2: exakte sequenzielle Simulation
+`simulateOptimalPlan()` ersetzt die naive „Betrag × Grenzsteuersatz“-Summe:
+- **Greedy über den echten § 32a-Tarif**: jede Runde wird die Maßnahme mit der höchsten
+  tatsächlichen Steuer-Differenz gewählt, das zvE fortgeschrieben (Progressionseffekt!).
+- **WK-Pauschalen-Logik korrekt**: Werbungskosten-Maßnahmen wirken nur oberhalb der
+  1.230-€-Schwelle — Profil-WK (Pendler + Homeoffice) füllen den Pool vorab, keine
+  Doppelzählung.
+- Wirkungs-Typologie: Werbungskosten / zvE-Abzug / direkte Ermäßigung (§ 35a) / Sondereffekt.
+- Bot-Ausgabe „Was kann ich optimieren?“: **umsetzungs-optimale Reihenfolge** mit exaktem
+  € je Schritt, kumulierter Ersparnis, ehrlicher Korrektur der naiven Summe
+  (Beispiel-Profil: exakt 1.089 € statt naiv 1.359 €) und zvE-/Grenzsteuersatz-Verlauf.
+- Export: `window.simulateOptimalPlan` (für künftige UI-Nutzung im 💡-Optimierer).
+
+## 5. Weitere Fixes
+- 🐛 `_calcPreciseGST`: Grundfreibetrag wurde **doppelt** abgezogen (einmal vorab, einmal
+  im Tarif) → Grenzsteuersatz app-weit zu niedrig. Behoben.
+- `buildUserProfile` akzeptiert `brutto` UND `jahresbrutto`.
+- Service Worker v20 → v21, Version 2.2.0.
+
+## Tests (alle grün)
+29-Intent-Smoke · 48er KB-Matrix (16 Konzepte × 3 Fragetypen) · Klassifikator-Rückfrage-
+Kette (mehrdeutig → „60k“ → Berechnung → „und in SK 4 mit 2 Kindern?“) · Slot-Filling-
+Dialog · §35a-/ELSTER-Routing · Optimierer-Simulation gegen Handrechnung.
+
+## Ehrliche Einordnung
+Das ist die Obergrenze dessen, was ohne echtes Sprachmodell geht: statistische
+Klassifikation + interpretierbare Wissensbasis + exakte Tarif-Simulation + Dialogverhalten
+(Rückfragen, Gedächtnis, Slot-Filling). Ein echtes LLM-Verständnis liefert weiterhin nur
+der Ollama-Modus. Und: schneller/konsistenter als ein Steuerberater in den Standardfällen — 
+Haftung und Einzelfall-Gestaltung ersetzt das System bewusst nicht.

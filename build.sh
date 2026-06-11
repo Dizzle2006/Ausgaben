@@ -171,19 +171,22 @@ cat > "$DIST/index.html" << HTMLEOF
   <script src="tax-optimizer.js"></script>
   <script src="app.js"></script>
 
-  <!-- PWA service worker registration -->
-  <script>
-    if ("serviceWorker" in navigator && location.protocol !== "file:") {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker
-          .register("service-worker.js")
-          .catch((err) => console.warn("SW registration failed:", err));
-      });
-    }
-  </script>
+  <!-- PWA service worker registration (externes File — kein inline script für CSP) -->
+  <script src="register-sw.js"></script>
 </body>
 </html>
 HTMLEOF
+
+# register-sw.js als externe Datei (CSP: script-src 'self' ohne unsafe-inline)
+cat > "$DIST/register-sw.js" << 'SWEOF'
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker
+      .register("service-worker.js")
+      .catch(function (err) { console.warn("SW registration failed:", err); });
+  });
+}
+SWEOF
 
 echo "  ✓ dist/index.html generiert (CSP: ${CSP_SCRIPT_SRC})"
 echo ""

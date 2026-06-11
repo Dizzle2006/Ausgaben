@@ -7,7 +7,8 @@
 // • Modal, geöffnet über den FAB im Steuer-Tab.
 // • Backends (Priorität):
 //     1. Ollama (localhost:11434) — lokales Modell, kein API-Key, kein Datenleck
-//     2. Deterministischer Fallback v3 — 28 Themen + NLU (Slots, Dialog-Gedächtnis, Fuzzy, Szenarien)
+//     2. Deterministischer Fallback v4 — 28 Themen + NLU + Trigramm-Klassifikator
+//        + strukturierte Wissensdatenbank (_WISSEN) + Slot-Filling + Rückfragen
 //   → Kein Proxy, kein Cloud-Dienst, keine externen APIs.
 // • Chats werden in IndexedDB persistiert.
 // • Vor jeder Antwort wird ein <user_kontext>-Block mit echten App-Daten
@@ -822,8 +823,242 @@ function _fuzzyIntents(msg) {
     .map(([k]) => k);
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// STATISTISCHER INTENT-KLASSIFIKATOR (Stufe 2.5) — "Mini-ML", offline
+//
+// Funktionsweise wie ein einfacher Text-Klassifikator (fastText-Prinzip):
+//   1. Trainingskorpus: ~8–12 Paraphrasen pro Thema (unten, erweiterbar)
+//   2. Vektorisierung: Zeichen-Trigramme (robust gegen Tippfehler,
+//      Wortstellung, Flexion — "pendeln"/"pendle"/"gependelt" teilen Trigramme)
+//   3. Pro Thema wird ein Zentroid-Vektor vorberechnet
+//   4. Anfrage → Trigramm-Vektor → Kosinus-Ähnlichkeit zu allen Zentroiden
+//   5. Konfidenz-Logik:
+//        sim ≥ 0.34                  → Thema übernehmen
+//        0.22 ≤ sim < 0.34 ODER      → RÜCKFRAGE mit Top-2-Kandidaten
+//        Top1−Top2 < 0.05               ("Meintest du A oder B?")
+//        sonst                       → weiter zu Stufe 3 (Fuzzy)
+//
+// Damit reagiert der Bot auf beliebige Formulierungen statt nur auf
+// Muster — und fragt wie ein Mensch nach, wenn er unsicher ist.
+// ════════════════════════════════════════════════════════════════════════
+
+const _TRAIN = {
+  homeoffice: [
+    "ich arbeite von zuhause", "tageweise im homeoffice taetig", "remote arbeiten steuer",
+    "arbeite daheim am schreibtisch", "wieviel gibt es pro heimarbeitstag",
+    "von zu hause aus angestellt", "mobiles arbeiten absetzen", "tagespauschale heimarbeit",
+    "ich bin oft im home office", "arbeitstage in der wohnung",
+  ],
+  pendler: [
+    "ich fahre jeden tag zur arbeit", "weg ins buero absetzen", "kilometer zur firma",
+    "taeglicher arbeitsweg mit dem auto", "mit der bahn zur arbeitsstelle",
+    "fahrtkosten geltend machen", "entfernung wohnung arbeitsstaette",
+    "strecke zum arbeitsplatz", "benzinkosten arbeitsweg", "ich pendle in eine andere stadt",
+  ],
+  werbungskosten: [
+    "berufliche ausgaben absetzen", "kosten fuer den job geltend machen",
+    "was zaehlt zu den werbungskosten", "ausgaben fuer die arbeit zurueckholen",
+    "beruflich veranlasste kosten", "ueber die pauschale kommen",
+    "einzelnachweis statt pauschbetrag", "arbeitgeber erstattet kosten nicht",
+  ],
+  bruttoNetto: [
+    "was bleibt von meinem gehalt uebrig", "wieviel wird mir ausgezahlt",
+    "abzuege vom lohn berechnen", "monatliches netto ausrechnen",
+    "vom brutto zum netto", "was kommt aufs konto", "gehalt nach steuern und abgaben",
+    "lohnabrechnung verstehen", "wie hoch sind meine abgaben",
+  ],
+  steuerklasse: [
+    "welche lohnsteuerklasse ist richtig", "nach der hochzeit klasse wechseln",
+    "drei fuenf oder vier vier", "faktorverfahren fuer ehepaare",
+    "steuerklassen kombination ehepartner", "alleinerziehend welche klasse",
+    "klassenwechsel beantragen", "lohnsteuerabzug zu hoch klasse pruefen",
+  ],
+  grundfreibetrag: [
+    "ab wann muss ich steuern zahlen", "bis zu welchem betrag steuerfrei",
+    "steuerfreies existenzminimum", "wieviel darf ich verdienen ohne steuer",
+    "untergrenze fuer einkommensteuer", "wann beginnt die steuerpflicht",
+  ],
+  sonderausgaben: [
+    "versicherungen von der steuer absetzen", "krankenkassenbeitraege geltend machen",
+    "spenden in der steuererklaerung", "vorsorgeaufwendungen eintragen",
+    "kirchensteuer als sonderausgabe", "weiterbildungskosten privat absetzen",
+  ],
+  haushaltsnahe: [
+    "putzhilfe von der steuer absetzen", "handwerkerrechnung geltend machen",
+    "reinigungskraft im haushalt steuer", "gartenarbeit absetzen",
+    "renovierung in der wohnung steuerlich", "hausmeisterkosten nebenkostenabrechnung",
+    "fensterputzer steuerermaessigung", "pflegekraft im haushalt",
+  ],
+  kapital: [
+    "gewinne aus aktien versteuern", "etf verkauft was nun", "dividenden in der steuer",
+    "zinsen vom tagesgeld melden", "depot gewinne steuer", "abgeltungsteuer auf wertpapiere",
+    "freistellungsauftrag bei der bank", "kursgewinne realisiert steuerpflichtig",
+    "thesaurierender fonds besteuerung",
+  ],
+  guenstiger: [
+    "kapitalertraege mit persoenlichem steuersatz", "guenstigerpruefung beantragen",
+    "weniger als 25 prozent auf kapital zahlen", "anlage kap antrag niedriger steuersatz",
+  ],
+  soli: [
+    "muss ich noch solidaritaetszuschlag zahlen", "soli abgeschafft fuer wen",
+    "freigrenze beim soli", "zuschlag auf die lohnsteuer",
+  ],
+  kirchensteuer: [
+    "wieviel kirchensteuer zahle ich", "aus der kirche austreten steuer sparen",
+    "kirchenmitglied abgaben", "konfession und steuerabzug",
+  ],
+  fristen: [
+    "bis wann muss die steuererklaerung abgegeben werden", "abgabetermin dieses jahr",
+    "deadline fuer die erklaerung", "frist verpasst was tun", "verlaengerung beim finanzamt",
+    "bin ich zur abgabe verpflichtet",
+  ],
+  minijob: [
+    "nebenjob auf geringfuegiger basis", "verdienstgrenze beim minijob",
+    "zweiter job neben der hauptstelle", "midijob uebergangsbereich",
+    "nebenbei etwas dazuverdienen steuer",
+  ],
+  riester: [
+    "riester vertrag lohnt sich das", "zulagen fuer altersvorsorge",
+    "grundzulage kinderzulage beantragen", "riester in der steuererklaerung",
+  ],
+  ruerup: [
+    "basisrente fuer selbststaendige", "ruerup beitraege absetzen",
+    "altersvorsorge ohne gesetzliche rente", "freiberufler rente steuerlich",
+  ],
+  bav: [
+    "betriebliche altersvorsorge ueber den arbeitgeber", "entgeltumwandlung sinnvoll",
+    "direktversicherung vom chef", "brutto in die betriebsrente einzahlen",
+  ],
+  aussergewoehnlich: [
+    "hohe arztkosten absetzen", "zahnarztrechnung steuererklaerung",
+    "krankheitskosten geltend machen", "brille und medikamente absetzen",
+    "pflege der eltern steuerlich", "behindertenpauschbetrag beantragen",
+    "zumutbare belastung ueberschritten",
+  ],
+  studenten: [
+    "als student steuern zurueckholen", "studienkosten geltend machen",
+    "erststudium oder zweitstudium absetzen", "werkstudent lohnsteuer",
+    "semesterbeitraege und fachbuecher", "azubi steuererklaerung lohnt sich",
+  ],
+  verlust: [
+    "verluste mit gewinnen verrechnen", "aktienverlust steuerlich nutzen",
+    "verlustbescheinigung bei der bank", "minus aus dem depot vortragen",
+    "verlustvortrag aus dem studium",
+  ],
+  arbeitsmittel: [
+    "laptop fuer die arbeit gekauft", "buerostuhl absetzen", "monitor beruflich angeschafft",
+    "handy dienstlich genutzt", "fachbuecher fuer den beruf", "technik fuer den job abschreiben",
+  ],
+  doppelteHH: [
+    "zweitwohnung am arbeitsort", "wochenendpendler zwei wohnungen",
+    "miete am beschaeftigungsort absetzen", "beruflich in anderer stadt wohnen",
+  ],
+  unterhalt: [
+    "unterhalt an die ex frau absetzen", "zahlungen nach der scheidung steuerlich",
+    "realsplitting anlage u", "kindesunterhalt in der steuer",
+  ],
+  kinder: [
+    "kindergeld oder kinderfreibetrag", "kitagebuehren absetzen",
+    "betreuungskosten fuer den sohn", "alleinerziehend mit tochter entlastung",
+    "was bekomme ich fuer meine kinder",
+  ],
+  rueckwirkend: [
+    "steuererklaerung fuer alte jahre nachreichen", "noch nie eine erklaerung abgegeben",
+    "rueckwirkend geld vom finanzamt holen", "vier jahre frist freiwillige abgabe",
+  ],
+  elster: [
+    "wie reiche ich die erklaerung online ein", "elster konto registrieren",
+    "formulare digital ausfuellen", "steuererklaerung uebers internet abgeben",
+    "welche anlage brauche ich",
+  ],
+  optimieren: [
+    "wie hole ich am meisten raus", "alle sparmoeglichkeiten zeigen",
+    "steuerlast senken tipps", "mehr erstattung vom finanzamt",
+    "was kann ich alles absetzen", "potenzial in meiner steuer finden",
+    "geld zurueck maximieren",
+  ],
+};
+
+// ── Trigramm-Vektorisierung ──────────────────────────────────────────────
+function _triVec(text) {
+  const t = "  " + _normalize(text).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ") + "  ";
+  const v = Object.create(null);
+  for (let i = 0; i < t.length - 2; i++) {
+    const g = t.slice(i, i + 3);
+    v[g] = (v[g] || 0) + 1;
+  }
+  return v;
+}
+
+function _cosine(a, b, normA, normB) {
+  let dot = 0;
+  const keys = Object.keys(a).length < Object.keys(b).length ? a : b;
+  const other = keys === a ? b : a;
+  for (const k in keys) if (other[k]) dot += keys[k] * other[k];
+  return dot / (normA * normB || 1);
+}
+
+function _norm(v) {
+  let s = 0;
+  for (const k in v) s += v[k] * v[k];
+  return Math.sqrt(s);
+}
+
+let _CENTROIDS = null;
+function _buildCentroids() {
+  _CENTROIDS = [];
+  for (const [intent, phrases] of Object.entries(_TRAIN)) {
+    const c = Object.create(null);
+    for (const ph of phrases) {
+      const v = _triVec(ph);
+      for (const k in v) c[k] = (c[k] || 0) + v[k];
+    }
+    _CENTROIDS.push({ intent, vec: c, norm: _norm(c) });
+  }
+}
+
+// → { best, sim, second, sim2 }  (sortierte Top-2-Kandidaten)
+function _statIntent(msg) {
+  if (!_CENTROIDS) _buildCentroids();
+  const v = _triVec(_stripNegations(msg));
+  const nv = _norm(v);
+  if (!nv) return { best: null, sim: 0, second: null, sim2: 0 };
+  let best = null, sim = -1, second = null, sim2 = -1;
+  for (const c of _CENTROIDS) {
+    const s = _cosine(v, c.vec, nv, c.norm);
+    if (s > sim) { second = best; sim2 = sim; best = c.intent; sim = s; }
+    else if (s > sim2) { second = c.intent; sim2 = s; }
+  }
+  return { best, sim, second, sim2 };
+}
+
+// Menschenlesbare Themen-Labels für Rückfragen
+const _INTENT_LABELS = {
+  homeoffice: "Homeoffice-Pauschale", pendler: "Pendlerpauschale",
+  werbungskosten: "Werbungskosten", bruttoNetto: "Brutto-Netto-Rechnung",
+  steuerklasse: "Steuerklassen", grundfreibetrag: "Grundfreibetrag/Freibeträge",
+  sonderausgaben: "Sonderausgaben", haushaltsnahe: "Haushaltsnahe/Handwerker (§ 35a)",
+  kapital: "Kapitalerträge/ETF", guenstiger: "Günstigerprüfung", soli: "Solidaritätszuschlag",
+  kirchensteuer: "Kirchensteuer", fristen: "Abgabefristen", minijob: "Minijob/Midijob",
+  riester: "Riester-Rente", ruerup: "Rürup/Basisrente", bav: "Betriebliche Altersvorsorge",
+  aussergewoehnlich: "Außergewöhnliche Belastungen", studenten: "Studenten/Azubis",
+  verlust: "Verluste/Verlustvortrag", arbeitsmittel: "Arbeitsmittel",
+  doppelteHH: "Doppelte Haushaltsführung", unterhalt: "Unterhalt",
+  kinder: "Kinder/Kindergeld", rueckwirkend: "Rückwirkende Erklärungen",
+  elster: "ELSTER/Formulare", optimieren: "Optimierungs-Analyse",
+};
+
+// ── Slot-Filling: aktive Rückfragen bei fehlenden Pflicht-Werten ─────────
+// Statt "trag es im Interview ein" fragt der Bot konkret nach und rechnet
+// mit der Antwort weiter (Zahl in der Folgenachricht genügt).
+const _REQUIRED_SLOTS = {
+  pendler:     { check: (p) => p.pendlKm > 0,  frage: "Wie viele Kilometer ist die **einfache Strecke** zur Arbeit? (z.B. „18 km“ — gern auch mit Arbeitstagen: „18 km an 200 Tagen“)", slot: "km" },
+  homeoffice:  { check: (p) => p.hoTage > 0,   frage: "An wie vielen **Tagen im Jahr** arbeitest du im Homeoffice? (z.B. „120 Tage“ oder „3 Tage die Woche“)", slot: "ho_tage" },
+  bruttoNetto: { check: (p) => p.brutto > 0,   frage: "Wie hoch ist dein **Jahresbrutto**? (z.B. „48.000 €“ oder „4.000 € im Monat“)", slot: "brutto" },
+};
+
 // ── Dialog-Gedächtnis (pro Session) ──────────────────────────────────────
-let _NLU_CTX = { intent: null, slots: null, ts: 0 };
+let _NLU_CTX = { intent: null, slots: null, ts: 0, pendingChoice: null, pendingSlot: null };
 const _FOLLOWUP_RE = /^(und\b|aber\b|ok(ay)?\b|dann\b|jetzt\b|stattdessen|gleiche|dasselbe|noch ?mal|was (w[äa]re|ist|wenn)|wie (w[äa]re|s[äa]he|viel w[äa]re)|angenommen|rechne|nimm\b|mach\b|bei\b|mit\b|f[üu]r\b)/i;
 
 function _resolveFollowUp(msg, slots, intents) {
@@ -1062,12 +1297,46 @@ function _h_optimieren(p, yr, K, ia, tweaks, state, investments) {
     return `Optimierungs-Engine nicht verfügbar. Bitte Seite neu laden.` + _TAG;
   }
   const profile = buildUserProfile(ia, tweaks);
+  // Slot-Überschreibungen (z.B. anderes Brutto in der Frage) durchreichen
+  if (p.brutto && p.brutto !== profile.brutto) profile.brutto = p.brutto;
   const ops = findOpportunities(profile, state.receipts || [], investments || {}, yr);
-  const valid = ops.filter(o => !o.__noData && o.ersparnis > 0).sort((a,b) => b.ersparnis - a.ersparnis);
+  const valid = ops.filter(o => !o.__noData && o.ersparnis > 0);
   if (!valid.length) {
     return `Kein Optimierungspotenzial erkannt — Profil ist möglicherweise unvollständig. Füll das Interview (📋) aus.` + _TAG;
   }
-  const top = valid.slice(0, 8);
+
+  // ── Exakte sequenzielle Simulation (Progression + WK-Pauschale korrekt) ──
+  const sim = (typeof simulateOptimalPlan === "function")
+    ? simulateOptimalPlan(profile, valid, yr)
+    : null;
+
+  if (sim && sim.plan && sim.plan.length) {
+    const wirksam = sim.plan.filter(x => x.exakt > 0).slice(0, 8);
+    const nullops = sim.plan.filter(x => x.exakt <= 0).length;
+    let r = `**Dein optimaler Steuer-Plan ${yr}** *(exakt über den § 32a-Tarif simuliert — in dieser Reihenfolge umsetzen)*\n\n`;
+    wirksam.forEach((x, i) => {
+      const op = x.op;
+      const badge = op.status === "lohnt" ? "✅" : op.status === "action" ? "⚡" : op.status === "warn" ? "⚠️" : "ℹ️";
+      const wirkLabel = x.wirkung === "credit" ? "direkte Steuerermäßigung" : x.wirkung === "wk" ? "Werbungskosten" : x.wirkung === "abzug" ? "senkt dein zvE" : "Sondereffekt";
+      r += `**${i + 1}. ${badge} ${op.titel}** — exakt **${_fmt(x.exakt)}** *(${wirkLabel})*\n`;
+      r += `   ${op.beschreibung}\n`;
+      if (op.paragraph) r += `   📌 ${op.paragraph}${op.anlage && op.anlage !== "—" ? " · " + op.anlage : ""}\n`;
+      if (op.aktion) r += `   👉 ${op.aktion}\n`;
+      r += `   💰 kumuliert nach diesem Schritt: **${_fmt(x.kumulativ)}**\n\n`;
+    });
+    r += `**Gesamtersparnis (exakt): ${_fmt(sim.gesamtExakt)}**`;
+    if (sim.gesamtNaiv > sim.gesamtExakt + 50) {
+      r += ` — die naive Einzelsumme (${_fmt(sim.gesamtNaiv)}) überschätzt, weil jede Maßnahme deinen Steuersatz für die nächste senkt und Werbungskosten erst über der ${_fmt(K.wk_pauschale)}-Pauschale wirken.`;
+    }
+    r += `\n\n📉 Dein zvE sinkt von ${_fmt(sim.zvE_vorher)} auf ${_fmt(sim.zvE_nachher)} · Grenzsteuersatz ${sim.gst_vorher} % → ${sim.gst_nachher} %`;
+    if (nullops > 0) r += `\n\n*${nullops} weitere Position${nullops > 1 ? "en" : ""} ohne zusätzliche Wirkung in deiner Konstellation (z.B. unter der WK-Pauschale) — Details im 💡-Optimierer.*`;
+    r += `\n\nDen vollständigen Optimierer öffnest du mit dem 💡-Button im Steuer-Tab.`;
+    return r + _TAG;
+  }
+
+  // Fallback: bisherige Top-Liste (naive Schätzwerte)
+  const sorted = valid.sort((a, b) => b.ersparnis - a.ersparnis);
+  const top = sorted.slice(0, 8);
   const gesamt = top.reduce((s, o) => s + o.ersparnis, 0);
   let r = `**Deine Top-${top.length} Steuer-Optimierungen ${yr}:**\n\n`;
   top.forEach((op, i) => {
@@ -1897,6 +2166,460 @@ function _detectKonzept(msg) {
 }
 
 // ── 4. Wissensdatenbank ──────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════
+// STRUKTURIERTE WISSENSDATENBANK (_WISSEN) + KOMPOSITIONS-ENGINE
+//
+// Statt fest verdrahteter Antworttexte: deklaratives Fakten-Schema, das
+// der Bot zur Laufzeit INTERPRETIERT — abhängig von
+//   · Fragetyp   (Definition? Wie funktioniert? Lohnt sich? Wo eintragen? …)
+//   · Situation  (Student, Azubi, selbständig, verheiratet, Rentner …)
+//   · Profil     (Grenzsteuersatz, Brutto → personalisierte €-Beispiele)
+//   · Steuerjahr (alle Beträge als {token} → live aus tax-config.json)
+//
+// Eine Frage = eine individuell komponierte Antwort aus denselben Fakten.
+// Neue Konzepte: einfach Eintrag ergänzen — kein neuer Handler-Code nötig.
+// ════════════════════════════════════════════════════════════════════════
+
+// Token-Auflösung: {gfb}, {wkp}, {hoJahr} … → aktuelle Werte aus K/Config
+function _kbTokens(yr, K) {
+  const raw = window.TAX_CONFIG_RAW || {};
+  const hoTag = K.homeoffice_pro_tag || 6, hoMax = K.homeoffice_max_tage || 210;
+  return {
+    jahr: yr,
+    gfb: _fmt(K.grundfreibetrag),
+    wkp: _fmt(K.wk_pauschale),
+    sap: "36 €",
+    spb: _fmt(K.sparerpauschbetrag_single || 1000),
+    spb2: _fmt(K.sparerpauschbetrag_verheiratet || 2000),
+    hoTag: hoTag + " €",
+    hoMax: String(hoMax),
+    hoJahr: _fmt(hoTag * hoMax),
+    gwgNetto: "800 €",
+    gwgBrutto: _fmt(raw.gwg_grenze_brutto || 952),
+    entf1: yr >= 2026 ? "0,38 €" : "0,30 €",
+    entf21: "0,38 €",
+    soliFg: _fmt(K.soli_freigrenze || 18130),
+    riesterZulage: _fmt((raw.riester || {}).grundzulage || 175),
+    riesterKind: _fmt((raw.riester || {}).kinderzulage_ab_2008 || 300),
+    riesterMaxSA: _fmt((raw.riester || {}).max_sa_abzug || 2100),
+    ruerupMax: _fmt((raw.ruerup || {}).hoechstbetrag || 29344),
+    hnMaxErm: _fmt((raw.haushaltsnahe_dienstleistungen || {}).max_ermaessigung || 4000),
+    hwMaxErm: _fmt((raw.handwerkerleistungen || {}).max_ermaessigung || 1200),
+    hwMaxArbeit: _fmt((raw.handwerkerleistungen || {}).max_arbeitskosten || 6000),
+    kigeld: _fmt(yr >= 2026 ? ((raw.kindergeld_monatlich || {}).ab_2026 || 259) : ((raw.kindergeld_monatlich || {}).bis_2025 || 255)),
+    kifb: _fmt(raw.kinderfreibetrag_gesamt_2026 || 9756),
+    kapSatz: "25 %",
+  };
+}
+
+function _kbRender(text, T) {
+  return String(text).replace(/\{(\w+)\}/g, function (m, k) { return T[k] != null ? T[k] : m; });
+}
+
+// ── Die Wissensdatenbank ─────────────────────────────────────────────────
+// Schema je Konzept:
+//   titel, paragraph, definition, funktionsweise[], werte[[label,token]],
+//   bedingungen[], lohnt_wenn[], lohnt_nicht[], beispiel, eintrag,
+//   fallstricke[], fuer{student,azubi,selbstaendig,rentner,verheiratet,minijob}, verwandt[]
+const _WISSEN = {
+
+  grundfreibetrag_konzept: {
+    titel: "Grundfreibetrag", paragraph: "§ 32a Abs. 1 EStG",
+    definition: "Das steuerfreie Existenzminimum: Auf ein zu versteuerndes Einkommen (zvE) bis **{gfb}** ({jahr}) fällt **null Einkommensteuer** an. Erst jeder Euro darüber wird besteuert — beginnend bei 14 %.",
+    funktionsweise: [
+      "Das zvE ist NICHT dein Brutto: zvE = Brutto − Sozialversicherung − Werbungskosten − Sonderausgaben − Freibeträge",
+      "Der Freibetrag steckt direkt in der Tarifformel — du musst nichts beantragen",
+      "Bei Zusammenveranlagung verdoppelt er sich für das Paar",
+    ],
+    werte: [["Grundfreibetrag {jahr}", "{gfb}"], ["Eintrittssteuersatz darüber", "14 %"]],
+    bedingungen: ["Gilt automatisch für jede unbeschränkt steuerpflichtige Person"],
+    beispiel: "Brutto 18.000 € − SV ≈ 3.600 € − Pauschalen {wkp} + {sap} → zvE ≈ 13.100 € → nur ~750 € über dem Freibetrag werden besteuert (≈ 105 € Steuer).",
+    eintrag: "Kein Eintrag nötig — automatisch im Tarif",
+    fallstricke: ["Freibetrag ≠ Freigrenze: Überschreiten macht nur den ÜBERSTEIGENDEN Teil steuerpflichtig, nicht alles"],
+    fuer: {
+      student: "Als Student mit Nebenjob bleibst du bis weit über {gfb} Brutto steuerfrei (SV + Pauschalen kommen oben drauf) — gezahlte Lohnsteuer holst du per Erklärung zurück.",
+      minijob: "Minijob-Einkommen läuft pauschal versteuert am Grundfreibetrag vorbei — es zählt nicht ins zvE.",
+      rentner: "Auch Renten nutzen den Grundfreibetrag — nur der Besteuerungsanteil der Rente zählt ins zvE.",
+    },
+    verwandt: ["arbeitnehmer_pauschbetrag_konzept", "progression"],
+  },
+
+  arbeitnehmer_pauschbetrag_konzept: {
+    titel: "Arbeitnehmer-Pauschbetrag (Werbungskosten-Pauschale)", paragraph: "§ 9a S. 1 Nr. 1a EStG",
+    definition: "**{wkp}** Werbungskosten werden dir **automatisch ohne einen einzigen Beleg** abgezogen. Einzelne Ausgaben einzutragen lohnt erst, wenn ihre SUMME {wkp} übersteigt.",
+    funktionsweise: [
+      "Das Finanzamt zieht {wkp} immer ab — auch bei 0 € echten Kosten",
+      "Trägst du Einzelposten ein, gilt: max(Pauschale, Summe der Einzelposten)",
+      "Nur der Betrag ÜBER der Pauschale bringt zusätzliche Ersparnis",
+    ],
+    werte: [["Pauschale {jahr}", "{wkp}"], ["Typische Schwelle", "ca. 16 km Pendelstrecke oder 150 HO-Tage reichen allein"]],
+    lohnt_wenn: ["Pendelweg + Homeoffice + Arbeitsmittel zusammen > {wkp}", "Umzug aus beruflichen Gründen, Fortbildung oder doppelte Haushaltsführung im Jahr"],
+    lohnt_nicht: ["Einzelkosten klar unter {wkp} — dann gilt ohnehin die Pauschale"],
+    beispiel: "20 km × 220 Tage Pendeln = deutlich über {wkp} → jeder weitere absetzbare Euro wirkt voll mit deinem Grenzsteuersatz.",
+    eintrag: "Anlage N, Zeilen 31–57",
+    fallstricke: ["Häufigster Denkfehler: „1.500 € eingetragen = 1.500 € mehr Erstattung“ — es wirken nur 270 € (Differenz zur Pauschale) × Grenzsteuersatz"],
+    fuer: {
+      azubi: "Gilt auch in der Ausbildung — Fahrten zur Berufsschule zählen als Werbungskosten.",
+      student: "Im Zweitstudium/dualen Studium gilt die Pauschale ebenso; im Erststudium läuft alles über Sonderausgaben (max. 6.000 €).",
+    },
+    verwandt: ["pendlerpauschale_konzept", "pauschale_vs_real"],
+  },
+
+  pendlerpauschale_konzept: {
+    titel: "Pendlerpauschale (Entfernungspauschale)", paragraph: "§ 9 Abs. 1 Nr. 4 EStG",
+    definition: "Für den Weg zur ersten Tätigkeitsstätte gibt es pro Arbeitstag **{entf1}/km** (ab km 21: {entf21}) — unabhängig vom Verkehrsmittel, nur für die **einfache** Strecke.",
+    funktionsweise: [
+      "Formel: Arbeitstage × einfache km × Satz",
+      "Homeoffice-Tage zählen nicht (kein Pendeln = kein Abzug, dafür Tagespauschale)",
+      "Zu Fuß, Rad, Bahn, Auto, Mitfahrer — der Satz ist identisch",
+    ],
+    werte: [["Satz km 1–20", "{entf1}/km"], ["Satz ab km 21", "{entf21}/km"]],
+    bedingungen: ["Erste Tätigkeitsstätte muss arbeitsrechtlich zugeordnet sein", "Pro Arbeitstag nur EINE Fahrt (auch bei Doppelschicht)"],
+    lohnt_wenn: ["Schon ~16 km × 220 Tage sprengen allein die {wkp}-Pauschale"],
+    beispiel: "25 km × 200 Tage = {entf1}-Rechnung → rund 1.900 € Werbungskosten — bei 30 % Grenzsteuersatz ≈ 570 € Ersparnis.",
+    eintrag: "Anlage N, Zeilen 31–40 (je Arbeitsstätte separat)",
+    fallstricke: [
+      "Nicht Hin- UND Rückweg ansetzen — nur einfache Entfernung",
+      "Kürzeste Straßenverbindung zählt; längere Route nur wenn verkehrsgünstiger und regelmäßig genutzt",
+      "ÖPNV-Tickets über der Pauschale: tatsächliche Kosten ansetzbar",
+    ],
+    fuer: {
+      selbstaendig: "Für Selbständige gilt das Pendant als Betriebsausgabe zur ersten Betriebsstätte — gleiche Sätze.",
+      student: "Fahrten zur Uni: im Zweitstudium volle Pendlerpauschale als Werbungskosten.",
+    },
+    verwandt: ["arbeitnehmer_pauschbetrag_konzept", "doppelte_hh_konzept"],
+  },
+
+  abgeltungsteuer_konzept: {
+    titel: "Abgeltungsteuer", paragraph: "§ 32d EStG",
+    definition: "Kapitalerträge (Zinsen, Dividenden, realisierte Kursgewinne) werden pauschal mit **{kapSatz}** besteuert (+ Soli, ggf. Kirchensteuer) — die Bank führt sie direkt ab, damit ist die Steuer „abgegolten“.",
+    funktionsweise: [
+      "Bank zieht automatisch ab: 25 % + 5,5 % Soli darauf (effektiv 26,375 %)",
+      "Vorher wird der Sparerpauschbetrag {spb} (verheiratet {spb2}) verrechnet — wenn ein Freistellungsauftrag vorliegt",
+      "Liegt dein persönlicher Steuersatz unter 25 % → Günstigerprüfung beantragen",
+    ],
+    werte: [["Steuersatz", "{kapSatz} + Soli"], ["Sparerpauschbetrag", "{spb} / {spb2}"]],
+    beispiel: "3.000 € realisierter ETF-Gewinn, FSA über {spb} erteilt → nur 2.000 € steuerpflichtig → ≈ 528 € Abzug.",
+    eintrag: "Läuft i.d.R. automatisch über die Bank; Anlage KAP nur bei Günstigerprüfung, fehlendem FSA oder Auslandsdepot",
+    fallstricke: [
+      "Ohne Freistellungsauftrag besteuert die Bank ab dem ersten Euro — Rückholung nur über Anlage KAP",
+      "Aktien-Verluste sind nur mit Aktien-Gewinnen verrechenbar (eigener Verlusttopf)",
+    ],
+    fuer: {
+      student: "Geringverdiener/Studenten liegen fast immer unter 25 % → Günstigerprüfung oder NV-Bescheinigung spart bares Geld.",
+      rentner: "Auch im Ruhestand gilt: persönlicher Satz < 25 %? → Anlage KAP mit Günstigerprüfung.",
+    },
+    verwandt: ["freistellungsauftrag_konzept", "guenstiger_pruefung_konzept", "teilfreistellung_konzept"],
+  },
+
+  freistellungsauftrag_konzept: {
+    titel: "Freistellungsauftrag (FSA)", paragraph: "§ 44a EStG",
+    definition: "Anweisung an deine Bank, Kapitalerträge bis zum Sparerpauschbetrag (**{spb}**, verheiratet **{spb2}**) **gar nicht erst zu versteuern**.",
+    funktionsweise: [
+      "Bei jeder Bank einzeln stellbar — die Summe aller FSAs darf {spb} nicht überschreiten",
+      "Aufteilung frei wählbar (z.B. 600 € Broker, 400 € Tagesgeldbank)",
+      "Änderung jederzeit online möglich",
+    ],
+    werte: [["Maximum gesamt", "{spb} (verheiratet {spb2})"]],
+    lohnt_wenn: ["IMMER, sobald irgendwo Zinsen/Dividenden anfallen — kostet nichts, spart sofort"],
+    beispiel: "800 € Zinsen ohne FSA → 211 € Abzug, die du dir erst über die Steuererklärung zurückholen musst. Mit FSA: 0 € Abzug.",
+    eintrag: "Direkt bei der Bank (online); vergessene Jahre über Anlage KAP korrigierbar",
+    fallstricke: ["Verteilung vergessen anzupassen, wenn Depot umzieht", "Gemeinsamer FSA nur bei Zusammenveranlagung"],
+    verwandt: ["abgeltungsteuer_konzept", "guenstiger_pruefung_konzept"],
+  },
+
+  guenstiger_pruefung_konzept: {
+    titel: "Günstigerprüfung", paragraph: "§ 32d Abs. 6 EStG",
+    definition: "Antrag, deine Kapitalerträge statt mit pauschal 25 % mit deinem **persönlichen** Steuersatz zu besteuern — das Finanzamt rechnet beides und nimmt **automatisch das Günstigere**.",
+    funktionsweise: [
+      "Kreuz in Anlage KAP, Zeile 4 — mehr nicht",
+      "Lohnt rechnerisch ab persönlichem Grenzsteuersatz < 25 % (zvE grob unter ~19.000 €)",
+      "Verlieren kannst du nichts: ist der Tarif schlechter, bleibt es bei 25 %",
+    ],
+    bedingungen: ["Alle Kapitalerträge müssen dann erklärt werden (vollständige Anlage KAP)"],
+    lohnt_wenn: ["Teilzeit, Studium, Elternzeit, Renteneintritt, Sabbatical — jedes Jahr mit niedrigem Einkommen"],
+    beispiel: "zvE 15.000 € (Grenzsatz ~20 %) + 2.000 € Kapitalerträge über dem FSA → statt 528 € nur ~400 € Steuer → ~128 € zurück.",
+    eintrag: "Anlage KAP, Zeile 4 (Günstigerprüfung beantragen)",
+    fuer: { student: "Für Studenten mit Depot fast immer ein Gewinn — prüfen lassen kostet nichts." },
+    verwandt: ["abgeltungsteuer_konzept"],
+  },
+
+  teilfreistellung_konzept: {
+    titel: "Teilfreistellung bei Fonds/ETFs", paragraph: "§ 20 InvStG",
+    definition: "Bei Aktienfonds/-ETFs (≥ 51 % Aktienquote) sind **30 % aller Erträge steuerfrei** — als Ausgleich für die Steuer, die der Fonds selbst schon zahlt.",
+    funktionsweise: [
+      "Gilt für Ausschüttungen, Vorabpauschale UND Verkaufsgewinne",
+      "Mischfonds (≥ 25 % Aktien): 15 % frei · Immobilienfonds: 60/80 %",
+      "Die Bank rechnet das automatisch — du siehst es in der Abrechnung",
+    ],
+    werte: [["Aktienfonds/ETF", "30 % steuerfrei"], ["Mischfonds", "15 % steuerfrei"]],
+    beispiel: "10.000 € Gewinn aus Welt-ETF → nur 7.000 € steuerpflichtig → effektiv ~18,5 % statt 26,375 %.",
+    eintrag: "Automatisch über die Bank; bei Auslandsdepots in Anlage KAP-INV",
+    verwandt: ["abgeltungsteuer_konzept", "vorabpauschale_konzept"],
+  },
+
+  vorabpauschale_konzept: {
+    titel: "Vorabpauschale", paragraph: "§ 18 InvStG",
+    definition: "Fiktiver Mindestertrag, den thesaurierende Fonds **jährlich im Voraus** versteuern müssen — damit der Fiskus nicht bis zum Verkauf warten muss.",
+    funktionsweise: [
+      "Berechnung: Fondswert × 70 % des Basiszinses (BMF, jährlich) — gedeckelt auf die tatsächliche Wertsteigerung",
+      "Abbuchung Anfang Januar fürs Vorjahr direkt vom Verrechnungskonto",
+      "Beim späteren Verkauf werden gezahlte Vorabpauschalen angerechnet — keine Doppelbesteuerung",
+    ],
+    fallstricke: ["Anfang Januar Konto decken — sonst verkauft die Bank notfalls Anteile", "FSA hoch genug setzen: Vorabpauschale verbraucht ihn zuerst"],
+    beispiel: "50.000 € thesaurierender ETF, Basiszins 2,5 % → Vorabpauschale ≈ 875 €, nach Teilfreistellung ~613 € steuerpflichtig → ~162 € Abzug im Januar.",
+    eintrag: "Automatisch über die Bank",
+    verwandt: ["teilfreistellung_konzept", "abgeltungsteuer_konzept"],
+  },
+
+  riester_konzept: {
+    titel: "Riester-Rente", paragraph: "§ 10a / §§ 79 ff. EStG",
+    definition: "Staatlich geförderte private Altersvorsorge: **{riesterZulage} Grundzulage** + **{riesterKind}/Kind** (ab 2008 geboren) jährlich — plus möglichem Sonderausgabenabzug bis **{riesterMaxSA}**.",
+    funktionsweise: [
+      "Volle Zulage bei Eigenbeitrag ≥ 4 % des Vorjahres-Bruttos (abzgl. Zulagen), min. 60 €",
+      "Finanzamt macht automatisch die Günstigerprüfung: Zulage vs. Steuerersparnis aus {riesterMaxSA}-Abzug — du bekommst das Bessere",
+      "Auszahlung im Alter voll steuerpflichtig (nachgelagerte Besteuerung)",
+    ],
+    werte: [["Grundzulage", "{riesterZulage}/Jahr"], ["Kinderzulage (ab 2008)", "{riesterKind}/Jahr"], ["Max. SA-Abzug", "{riesterMaxSA}"]],
+    lohnt_wenn: ["Mehrere Kinder (Zulagenquote oft > 50 %)", "Gutverdiener nahe Höchstbeitrag (Steuereffekt)"],
+    lohnt_nicht: ["Hohe Vertragskosten fressen die Förderung — Altverträge prüfen", "Sehr niedrige Rentenfaktoren bei Versicherungslösungen"],
+    beispiel: "2 Kinder + {riesterZulage} selbst = 775 € Zulagen auf z.B. 1.000 € Eigenbeitrag → 77 % staatliche Quote.",
+    eintrag: "Anlage AV",
+    fuer: { verheiratet: "Mittelbar förderberechtigte Ehepartner bekommen die Zulage schon ab 60 € Eigenbeitrag." },
+    verwandt: ["ruerup_konzept", "bav_konzept"],
+  },
+
+  ruerup_konzept: {
+    titel: "Rürup-/Basisrente", paragraph: "§ 10 Abs. 1 Nr. 2 EStG",
+    definition: "Private Altersvorsorge mit Steuerabzug: Beiträge bis **{ruerupMax}** ({jahr}) sind zu **100 %** als Sonderausgaben absetzbar — gedacht vor allem für Selbständige ohne gesetzliche Rente.",
+    funktionsweise: [
+      "Jeder eingezahlte Euro senkt das zvE sofort — Ersparnis = Beitrag × Grenzsteuersatz",
+      "Höchstbetrag teilt sich mit den Pflichtbeiträgen zur gesetzlichen RV",
+      "Rente später steuerpflichtig (Besteuerungsanteil je Rentenbeginn)",
+    ],
+    werte: [["Höchstbetrag {jahr}", "{ruerupMax}"], ["Abzugsquote", "100 %"]],
+    lohnt_wenn: ["Selbständige/Freiberufler mit hohem Grenzsteuersatz (42 %: 10.000 € Beitrag → 4.200 € Steuer zurück)", "Angestellte als Top-up im Spitzensteuerjahr (Bonus, Abfindung)"],
+    lohnt_nicht: ["Kein Kapitalzugriff vor Rente, nicht vererbbar/kündbar — Liquidität bedenken"],
+    beispiel: "Selbständig, Grenzsteuersatz 42 %, 12.000 € Beitrag → ~5.040 € weniger Steuer im selben Jahr.",
+    eintrag: "Anlage Vorsorgeaufwand, Zeilen 4–10",
+    fuer: { selbstaendig: "Praktisch die einzige Vorsorgeform mit vollem Sofortabzug für dich — Kernbaustein der Steuerplanung." },
+    verwandt: ["riester_konzept", "bav_konzept"],
+  },
+
+  bav_konzept: {
+    titel: "Betriebliche Altersvorsorge (Entgeltumwandlung)", paragraph: "§ 3 Nr. 63 EStG",
+    definition: "Du zahlst direkt aus dem **Brutto** in eine Betriebsrente: bis 4 % der BBG steuer- UND sozialabgabenfrei (bis 8 % steuerfrei) — der Arbeitgeber muss **15 % Zuschuss** drauflegen.",
+    funktionsweise: [
+      "100 € Umwandlung kosten dich netto oft nur ~50–55 €",
+      "Arbeitgeberzuschuss von 15 % ist seit 2022 für alle Verträge Pflicht",
+      "Auszahlung später steuer- und KV-pflichtig (Freibetrag in der KVdR beachten)",
+    ],
+    lohnt_wenn: ["Arbeitgeber zahlt MEHR als die Pflicht-15 % dazu", "Hoher Grenzsteuersatz heute, niedrigerer im Alter erwartet"],
+    lohnt_nicht: ["Jobwechsel-Hopper: Verträge sind oft schlecht übertragbar", "Sehr teure Versicherungstarife des Anbieters"],
+    beispiel: "100 €/Monat umgewandelt bei 30 % Grenzsteuersatz + ~20 % SV → Netto-Verzicht nur ~50 €, plus 15 € AG-Zuschuss obendrauf.",
+    eintrag: "Läuft über die Gehaltsabrechnung — kein Eintrag in der Erklärung nötig",
+    verwandt: ["riester_konzept", "ruerup_konzept"],
+  },
+
+  zumutbare_eigenbelastung: {
+    titel: "Zumutbare Eigenbelastung", paragraph: "§ 33 Abs. 3 EStG",
+    definition: "Dein **Selbstbehalt** bei außergewöhnlichen Belastungen (Krankheit, Pflege …): nur Kosten ÜBER dieser Schwelle wirken steuerlich. Sie beträgt 1–7 % der Einkünfte, gestaffelt nach Einkommen, Familienstand und Kindern.",
+    funktionsweise: [
+      "Stufenberechnung: bis 15.340 € / bis 51.130 € / darüber — je eigener Prozentsatz",
+      "Mit Kindern sinken die Sätze deutlich (2–4 % statt 5–7 %)",
+      "Deshalb: planbare Gesundheitskosten (Zahnersatz, Brille, OP) in EIN Jahr bündeln",
+    ],
+    beispiel: "40.000 € Einkünfte, ledig, keine Kinder → Eigenbelastung ≈ 2.300 €. 3.000 € Zahnarztkosten → nur 700 € wirken.",
+    eintrag: "Anlage Außergewöhnliche Belastungen",
+    fallstricke: ["Kosten übers Jahr verteilt → jedes Jahr unter der Schwelle → 0 € Wirkung. Bündeln!"],
+    fuer: { verheiratet: "Bei Zusammenveranlagung zählt das gemeinsame Einkommen für die Schwelle — Sätze sind aber niedriger." },
+    verwandt: ["haushaltsnahe_konzept"],
+  },
+
+  haushaltsnahe_konzept: {
+    titel: "Haushaltsnahe Dienstleistungen & Handwerker", paragraph: "§ 35a EStG",
+    definition: "**Direkte Steuerermäßigung** (kein Abzug vom Einkommen!): 20 % der Arbeitskosten werden 1:1 von deiner Steuer abgezogen — bis **{hnMaxErm}** (Dienstleistungen) bzw. **{hwMaxErm}** (Handwerker).",
+    funktionsweise: [
+      "Nur ARBEITS-, Fahrt- und Maschinenkosten zählen — Material nie",
+      "Rechnung + Überweisung Pflicht (Barzahlung = 0 €)",
+      "Wirkt unabhängig vom Grenzsteuersatz — 20 % für jeden",
+    ],
+    werte: [["Haushaltsnahe (Putzhilfe, Pflege, Garten)", "20 % bis {hnMaxErm}"], ["Handwerker (max. {hwMaxArbeit} Arbeitskosten)", "20 % bis {hwMaxErm}"], ["Minijobber im Haushalt", "20 % bis 510 €"]],
+    beispiel: "Handwerkerrechnung 2.000 €, davon 1.400 € Arbeitslohn → 280 € direkt weniger Steuer.",
+    eintrag: "Hauptvordruck ESt 1 A, Zeilen 71–79",
+    fallstricke: ["Mieter: Anteile stecken in der Nebenkostenabrechnung (§ 35a-Bescheinigung anfordern!)", "Neubaumaßnahmen sind ausgeschlossen — nur Renovierung/Erhaltung"],
+    verwandt: ["zumutbare_eigenbelastung"],
+  },
+
+  gwg: {
+    titel: "Geringwertige Wirtschaftsgüter (GWG)", paragraph: "§ 6 Abs. 2 EStG",
+    definition: "Arbeitsmittel bis **{gwgNetto} netto** ({gwgBrutto} brutto) darfst du **sofort im Kaufjahr voll absetzen** — keine Verteilung über die Nutzungsdauer nötig.",
+    funktionsweise: [
+      "Über der Grenze: Abschreibung über die AfA-Nutzungsdauer",
+      "Ausnahme Computer/Software: seit 2021 IMMER Sofortabschreibung, egal wie teuer",
+      "Berufliche Nutzung < 90 %? → anteilig ansetzen",
+    ],
+    werte: [["GWG-Grenze", "{gwgNetto} netto / {gwgBrutto} brutto"], ["PC/Laptop/Software", "immer sofort (Nutzungsdauer 1 Jahr)"]],
+    beispiel: "Bürostuhl 749 € → komplett dieses Jahr. Schreibtisch 1.100 € → 13 Jahre AfA (~85 €/Jahr).",
+    eintrag: "Anlage N, Zeile 57",
+    verwandt: ["afa", "arbeitnehmer_pauschbetrag_konzept"],
+  },
+
+  afa: {
+    titel: "AfA — Absetzung für Abnutzung", paragraph: "§ 7 EStG",
+    definition: "Teure Arbeitsmittel werden über ihre amtliche **Nutzungsdauer verteilt** abgesetzt — z.B. Möbel 13 Jahre, Smartphone 3 Jahre (vor 2021 auch PCs).",
+    funktionsweise: [
+      "Kaufpreis ÷ Nutzungsdauer = Jahresbetrag; im Kaufjahr monatsgenau",
+      "AfA-Tabellen des BMF legen die Dauer fest",
+      "Computer/Software: seit 2021 Nutzungsdauer 1 Jahr → faktisch Sofortabzug",
+    ],
+    werte: [["Laptop/PC/Software", "1 Jahr (sofort)"], ["Smartphone", "3 Jahre"], ["Schreibtisch/Stuhl", "13 Jahre"]],
+    beispiel: "Kamera 1.800 € (Nutzungsdauer 7 Jahre), Kauf im Juli → dieses Jahr 6/12 × 257 € ≈ 129 €.",
+    eintrag: "Anlage N, Zeile 57 (mit Anschaffungsdatum)",
+    verwandt: ["gwg"],
+  },
+
+  progressionsvorbehalt: {
+    titel: "Progressionsvorbehalt", paragraph: "§ 32b EStG",
+    definition: "Lohnersatzleistungen (Elterngeld, Kurzarbeitergeld, Krankengeld, ALG I) sind selbst **steuerfrei** — erhöhen aber den **Steuersatz** auf dein übriges Einkommen.",
+    funktionsweise: [
+      "Fiktive Rechnung: Steuersatz wird ermittelt, ALS OB die Leistung steuerpflichtig wäre",
+      "Dieser höhere Satz trifft dann nur das tatsächlich steuerpflichtige Einkommen",
+      "Folge: oft Nachzahlung + Pflicht zur Abgabe ab 410 € Leistungsbezug",
+    ],
+    beispiel: "30.000 € Gehalt + 10.000 € Elterngeld → Steuersatz wie bei 40.000 €, angewendet auf 30.000 € → einige hundert Euro Nachzahlung möglich.",
+    eintrag: "Wird automatisch aus den Bescheinigungen übernommen (Anlage N / Hauptvordruck)",
+    fallstricke: ["Rücklage bilden! Viele Eltern trifft die Nachzahlung unvorbereitet", "Abgabepflicht ab 410 € Lohnersatz nicht verpassen"],
+    verwandt: ["progression"],
+  },
+
+  fuenftelregelung: {
+    titel: "Fünftelregelung (Abfindungen)", paragraph: "§ 34 EStG",
+    definition: "Abfindungen und andere außerordentliche Einkünfte werden rechnerisch **auf 5 Jahre verteilt** besteuert — das mildert den Progressionssprung des Einmalbetrags.",
+    funktionsweise: [
+      "Steuer auf (Einkommen + 1/5 Abfindung) minus Steuer auf Einkommen, Differenz × 5",
+      "Seit 2025 nicht mehr automatisch im Lohnsteuerabzug — MUSS über die Steuererklärung beantragt werden",
+      "Maximaler Effekt, wenn das übrige Einkommen im Abfindungsjahr NIEDRIG ist",
+    ],
+    lohnt_wenn: ["Abfindung + Sabbatical/Arbeitslosigkeit im selben Jahr", "Kombination mit Rürup-Einmalbeitrag drückt das übrige zvE zusätzlich"],
+    beispiel: "60.000 € Abfindung bei 0 € sonstigem Einkommen → mit Fünftelregelung mehrere tausend Euro weniger Steuer als bei Vollbesteuerung.",
+    eintrag: "Anlage N (Entschädigungen) — Antrag in der Veranlagung",
+    fallstricke: ["Auszahlungszeitpunkt verhandeln: Januar des Folgejahres ist oft Gold wert"],
+    verwandt: ["ruerup_konzept", "progression"],
+  },
+
+  progression: {
+    titel: "Steuerprogression & Grenzsteuersatz", paragraph: "§ 32a EStG",
+    definition: "Der Tarif steigt gleitend: Der **Grenzsteuersatz** (Steuer auf deinen NÄCHSTEN Euro) wächst von 14 % am Grundfreibetrag bis 42 %/45 % — dein Durchschnittssatz liegt immer deutlich darunter.",
+    funktionsweise: [
+      "Jeder abgesetzte Euro spart genau den Grenzsteuersatz — nicht den Durchschnittssatz",
+      "Mythos „mehr Brutto lohnt nicht“: FALSCH — nur der Zuwachs wird höher besteuert, nie das Bestehende",
+      "42 % greifen {jahr} ab ~69.900 € zvE, 45 % ab 277.826 €",
+    ],
+    beispiel: "Grenzsteuersatz 35 %: 1.000 € zusätzliche Werbungskosten → exakt 350 € weniger Steuer.",
+    eintrag: "—",
+    verwandt: ["grundfreibetrag_konzept", "fuenftelregelung"],
+  },
+
+  dienstwagen_konzept: {
+    titel: "Dienstwagen-Besteuerung", paragraph: "§ 8 Abs. 2 EStG",
+    definition: "Private Nutzung des Firmenwagens ist **geldwerter Vorteil**: pauschal **1 % des Bruttolistenpreises/Monat** (+ 0,03 %/km Arbeitsweg) — oder exakt per **Fahrtenbuch**.",
+    funktionsweise: [
+      "E-Autos: nur 0,25 % (Listenpreis ≤ 70.000 €), Hybride 0,5 %",
+      "Fahrtenbuch lohnt bei wenig Privatnutzung oder altem/abgeschriebenem Fahrzeug",
+      "Zuzahlungen des Arbeitnehmers mindern den Vorteil",
+    ],
+    werte: [["Verbrenner", "1 %/Monat"], ["Plug-in-Hybrid", "0,5 %"], ["E-Auto ≤ 70.000 €", "0,25 %"]],
+    beispiel: "E-Auto, Listenpreis 50.000 € → 125 €/Monat geldwerter Vorteil statt 500 € beim Verbrenner.",
+    eintrag: "Läuft über die Gehaltsabrechnung; Fahrtenbuch-Korrektur in Anlage N",
+    fallstricke: ["0,03 %-Pauschale für den Arbeitsweg fällt AUCH bei Homeoffice an — Einzelbewertung (0,002 %/Fahrt) beantragen, wenn < 15 Fahrten/Monat"],
+    verwandt: ["pendlerpauschale_konzept"],
+  },
+};
+
+// ── Kompositions-Engine: Fragetyp × Situation × Profil → Antwort ─────────
+function _kbAntwort(key, ft, mod, p, yr, K) {
+  const W = _WISSEN[key];
+  if (!W) return null;
+  const T = _kbTokens(yr, K);
+  const R = function (t) { return _kbRender(t, T); };
+  const teile = [];
+
+  // Kopf
+  teile.push("**" + R(W.titel) + "**" + (W.paragraph ? " (" + W.paragraph + ")" : ""));
+
+  // Situations-Hinweis
+  const sit = [];
+  if (mod.student) sit.push("Student");
+  if (mod.azubi) sit.push("Azubi");
+  if (mod.selbstaendig) sit.push("selbständig");
+  if (mod.rentner) sit.push("Rentner");
+  if (mod.verheiratet) sit.push("verheiratet");
+  if (mod.minijob) sit.push("Minijob");
+  if (sit.length) teile.push("👤 *Kontext erkannt: " + sit.join(", ") + " — ich beziehe das unten ein.*");
+
+  const will = {
+    def:    !ft || ft === "definition" || ft === "vergleich",
+    wie:    !ft || ft === "wie_funktioniert" || ft === "konditional",
+    werte:  !ft || ft === "definition" || ft === "wie_funktioniert",
+    lohnt:  !ft || ft === "lohnt" || ft === "vergleich" || ft === "wer_berechtigt",
+    gilt:   ft === "gilt_fuer" || ft === "wer_berechtigt" || ft === "konditional",
+    wo:     !ft || ft === "wo_eintragen",
+    falle:  !ft || ft === "konditional" || ft === "lohnt",
+    bsp:    !ft || ft === "definition" || ft === "wie_funktioniert" || ft === "lohnt",
+  };
+
+  if (ft === "wo_eintragen" && W.eintrag) teile.push("📌 **Direktantwort:** " + R(W.eintrag));
+  if (will.def && W.definition) teile.push(R(W.definition));
+
+  if (will.wie && W.funktionsweise && W.funktionsweise.length) {
+    teile.push("**So funktioniert es:**\n" + W.funktionsweise.map(function (x) { return "- " + R(x); }).join("\n"));
+  }
+  if (will.werte && W.werte && W.werte.length) {
+    teile.push("**Aktuelle Werte " + yr + ":**\n" + W.werte.map(function (x) { return "- " + R(x[0]) + ": **" + R(x[1]) + "**"; }).join("\n"));
+  }
+  if (will.gilt && W.bedingungen && W.bedingungen.length) {
+    teile.push("**Voraussetzungen:**\n" + W.bedingungen.map(function (x) { return "- " + R(x); }).join("\n"));
+  }
+  if (will.lohnt && (W.lohnt_wenn || W.lohnt_nicht)) {
+    let lt = "";
+    if (W.lohnt_wenn)  lt += "**Lohnt sich, wenn:**\n" + W.lohnt_wenn.map(function (x) { return "- ✅ " + R(x); }).join("\n");
+    if (W.lohnt_nicht) lt += (lt ? "\n\n" : "") + "**Eher nicht, wenn:**\n" + W.lohnt_nicht.map(function (x) { return "- ⚠️ " + R(x); }).join("\n");
+    teile.push(lt);
+  }
+  if (will.bsp && W.beispiel) teile.push("**Beispiel:** " + R(W.beispiel));
+
+  // Personalisierung aus dem Profil
+  if (p && p.gst != null && p.gst > 0 && key !== "haushaltsnahe_konzept") {
+    teile.push("💡 *Dein Grenzsteuersatz: ~" + p.gst + " % — jeder hier abgesetzte Euro spart dir ca. " + p.gst + " Cent.*");
+  }
+
+  // Situations-spezifische Fakten
+  if (W.fuer) {
+    const hits = [];
+    if (mod.student && W.fuer.student) hits.push("🎓 " + R(W.fuer.student));
+    if (mod.azubi && W.fuer.azubi) hits.push("🛠 " + R(W.fuer.azubi));
+    if (mod.selbstaendig && W.fuer.selbstaendig) hits.push("💼 " + R(W.fuer.selbstaendig));
+    if (mod.rentner && W.fuer.rentner) hits.push("🌅 " + R(W.fuer.rentner));
+    if (mod.verheiratet && W.fuer.verheiratet) hits.push("💍 " + R(W.fuer.verheiratet));
+    if (mod.minijob && W.fuer.minijob) hits.push("🪙 " + R(W.fuer.minijob));
+    if (hits.length) teile.push("**Für deine Situation:**\n" + hits.join("\n"));
+  }
+
+  if (will.falle && W.fallstricke && W.fallstricke.length) {
+    teile.push("**Typische Fehler:**\n" + W.fallstricke.map(function (x) { return "- ❌ " + R(x); }).join("\n"));
+  }
+  if (will.wo && ft !== "wo_eintragen" && W.eintrag && W.eintrag !== "—") {
+    teile.push("📌 **Eintrag:** " + R(W.eintrag));
+  }
+  if (W.verwandt && W.verwandt.length) {
+    const labels = W.verwandt.map(function (k) { return _WISSEN[k] ? _WISSEN[k].titel : k; }).slice(0, 3);
+    teile.push("💬 *Frag mich auch zu:* " + labels.map(function (l) { return "*„" + l + "“*"; }).join(" · "));
+  }
+
+  return teile.join("\n\n") + _TAG;
+}
+
 function _konzeptAntwort(key, ft, mod, p, yr, K) {
   const y = yr || new Date().getFullYear();
   const gfb = K?.grundfreibetrag || 12096;
@@ -3338,7 +4061,7 @@ function _detectKonzeptSimple(msg) {
   if (/(azubi|auszubildende).{0,20}(steuer|kosten|abset)/.test(m)) return "azubi_steuer_konzept";
   if (/zumutbare.{0,10}eigenbelastung/.test(m)) return "zumutbare_eigenbelastung";
   if (/behinderten.?pauschbetrag/.test(m)) return "behinderten_pauschbetrag_konzept";
-  if (/§.?35a|haushaltsnahe.{0,15}(dienst|systematik)/.test(m)) return "haushaltsnahe_konzept";
+  if (/§.?35a|haushaltsnahe|handwerker|putzhilfe|putzfrau|putzkraft|reinigungskraft|haushaltshilfe|gartenpflege/.test(m)) return "haushaltsnahe_konzept";
   if (/sonderausgaben.{0,20}(was|wie|systematik|unterschied)/.test(m)) return "sonderausgaben_konzept";
   if (/verlustvortrag/.test(m)) return "verlustvortrag_konzept";
   if (/festsetzungsverjähr|4.{0,5}jahre.{0,20}rückwirkend/.test(m)) return "festsetzungsverjaehrung_konzept";
@@ -3357,7 +4080,12 @@ function _detectKonzeptSimple(msg) {
 
 // ── 6. Haupt-Konzept-Dispatcher ──────────────────────────────────────────
 function _tryKonzeptAntwort(userMsg, p, yr, K) {
-  const ft  = _detectFragetyp(userMsg);
+  let ft  = _detectFragetyp(userMsg);
+  // "Wo trage ich [die Handwerkerkosten] ein?" — Einschub zwischen Verb
+  // und "ein" wird vom strikten Muster nicht erfasst
+  if (!ft && /wo\s+(trage|gebe|fülle|trägt)\b[\s\S]{0,60}\bein|welche[rs]?\s+(anlage|zeile|formular)|in\s+welche[rms]?\s+(anlage|zeile|formular)/i.test(userMsg)) {
+    ft = "wo_eintragen";
+  }
   const mod = _detectModifiers(userMsg);
 
   // Primäre Konzept-Erkennung (bidirektionale Muster)
@@ -3371,6 +4099,19 @@ function _tryKonzeptAntwort(userMsg, p, yr, K) {
 
   // Kein Konzept identifiziert → normaler Intent-Weg
   if (!konzept) return null;
+
+  // KB-Kollisions-Auflösung: generische Muster (z.B. "was ist ... pauschale")
+  // dürfen kein spezifisches KB-Konzept verdecken — wenn das Simple-Matching
+  // ein Konzept MIT Wissensdatenbank-Eintrag findet, gewinnt dieses.
+  if (!_WISSEN[konzept]) {
+    const simple = _detectKonzeptSimple(userMsg);
+    if (simple && _WISSEN[simple]) konzept = simple;
+  }
+
+  // Strukturierte Wissensdatenbank bevorzugen (Fragetyp-/Situations-/
+  // Profil-komponiert, Werte live aus tax-config.json)
+  const kbA = _kbAntwort(konzept, ft, mod, p, yr, K);
+  if (kbA) return kbA;
 
   const antwort = _konzeptAntwort(konzept, ft, mod, p, yr, K);
   return antwort; // null wenn kein Handler → Intent-Weg
@@ -3469,6 +4210,79 @@ function deterministicSteuerAntwort(userMsg, { tweaks = {}, state = {}, investme
 
   const ia = interviewAnswers || {};
 
+  // 2b. Offene Rückfrage auflösen — Themen-Wahl ("1"/"2") oder erfragter Wert
+  if (_NLU_CTX.pendingChoice && Date.now() - _NLU_CTX.ts < 10 * 60 * 1000) {
+    const c1 = _NLU_CTX.pendingChoice[0], c2 = _NLU_CTX.pendingChoice[1];
+    const low = String(userMsg).toLowerCase().trim();
+    let gewaehlt = null;
+    if (/^(1\b|eins\b|erste|ersteres|ja\b)/.test(low)) gewaehlt = c1;
+    else if (/^(2\b|zweite|zweiteres)/.test(low)) gewaehlt = c2;
+    else {
+      const l1 = (_INTENT_LABELS[c1] || c1).toLowerCase().slice(0, 7);
+      const l2 = (_INTENT_LABELS[c2] || c2).toLowerCase().slice(0, 7);
+      if (low.includes(l1)) gewaehlt = c1;
+      else if (low.includes(l2)) gewaehlt = c2;
+    }
+    // Keine explizite Wahl, aber die Antwort enthält einen Wert, der nur zu
+    // EINEM Kandidaten passt ("60k" → Brutto-Netto, "25 km" → Pendler)
+    if (!gewaehlt) {
+      const passt = function (intent) {
+        if (intent === "bruttoNetto") return slotsNew.brutto != null || slotsNew._nums.some(function (v) { return v >= 3000 && v <= 2000000; });
+        if (intent === "pendler") return slotsNew.km != null;
+        if (intent === "homeoffice") return slotsNew.ho_tage != null || slotsNew.tage_pro_woche != null;
+        return false;
+      };
+      const p1 = passt(c1), p2 = passt(c2);
+      if (p1 && !p2) gewaehlt = c1;
+      else if (p2 && !p1) gewaehlt = c2;
+      if (gewaehlt === "bruttoNetto" && slotsNew.brutto == null) {
+        const cand = slotsNew._nums.filter(function (v) { return v >= 3000 && v <= 2000000; });
+        if (cand.length) { slotsNew.brutto = cand[0]; slotsNew.bruttoList = cand; }
+      }
+    }
+    _NLU_CTX.pendingChoice = null;
+    if (gewaehlt) {
+      const mergedC = Object.assign({}, _NLU_CTX.slots || {}, slotsNew, { _nums: slotsNew._nums });
+      const pSel = _applySlots(_profile(ia, tweaks, yr, K), mergedC, userMsg, yr, K);
+      _NLU_CTX = { intent: gewaehlt, slots: mergedC, ts: Date.now(), pendingChoice: null, pendingSlot: null };
+      return _dispatchIntent(gewaehlt, pSel, yr, K, ia, tweaks, state, investments);
+    }
+    // keine klare Wahl → normal weiterverarbeiten (User hat neu formuliert)
+  }
+  if (_NLU_CTX.pendingSlot && Date.now() - _NLU_CTX.ts < 10 * 60 * 1000) {
+    const ps = _NLU_CTX.pendingSlot;
+    const eigene = _detectAllIntents(_stripNegations(userMsg));
+    const hatEigenesThema = eigene[0] !== "default" && String(userMsg).trim().length > 25;
+    if (hatEigenesThema) {
+      _NLU_CTX.pendingSlot = null; // User hat das Thema gewechselt
+    } else if (slotsNew._nums && slotsNew._nums.length > 0) {
+      if (ps.slot === "km" && slotsNew.km == null) {
+        const c = slotsNew._nums.filter(function (v) { return v >= 1 && v <= 400; });
+        if (c.length) { slotsNew.km = c[0]; slotsNew.kmList = c; }
+      }
+      if (ps.slot === "ho_tage" && slotsNew.ho_tage == null && slotsNew.tage_pro_woche == null) {
+        const c = slotsNew._nums.filter(function (v) { return v >= 1 && v <= 210; });
+        if (c.length) slotsNew.ho_tage = c[0];
+      }
+      if (ps.slot === "brutto" && slotsNew.brutto == null) {
+        const c = slotsNew._nums.filter(function (v) { return v >= 3000 && v <= 2000000; });
+        if (c.length) { slotsNew.brutto = c[0]; slotsNew.bruttoList = c; }
+      }
+      const gefuellt = (ps.slot === "km" && slotsNew.km != null) ||
+                       (ps.slot === "ho_tage" && (slotsNew.ho_tage != null || slotsNew.tage_pro_woche != null)) ||
+                       (ps.slot === "brutto" && slotsNew.brutto != null);
+      if (gefuellt) {
+        const mergedS = Object.assign({}, _NLU_CTX.slots || {}, slotsNew, { _nums: slotsNew._nums });
+        const pFill = _applySlots(_profile(ia, tweaks, yr, K), mergedS, userMsg, yr, K);
+        const intentP = ps.intent;
+        _NLU_CTX = { intent: intentP, slots: mergedS, ts: Date.now(), pendingChoice: null, pendingSlot: null };
+        return "✅ *Danke — ich rechne damit:*\n\n" + _dispatchIntent(intentP, pFill, yr, K, ia, tweaks, state, investments);
+      }
+      _NLU_CTX.pendingSlot = null; // Zahl passte nicht zum erfragten Wert
+    }
+  }
+
+
   // 3. Intents erkennen (Stufe 1 Regex + Stufe 2 Semantik)
   //    Negierte Themen ("kein Homeoffice …") vorher entfernen
   const intentMsg = _stripNegations(userMsg);
@@ -3511,6 +4325,20 @@ function deterministicSteuerAntwort(userMsg, { tweaks = {}, state = {}, investme
     }
   }
 
+  // 4d. Stufe 2.5: Statistischer Trigramm-Klassifikator — versteht beliebige
+  //     Formulierungen. Bei Unsicherheit → Rückfrage statt Raten.
+  if (intents[0] === "default") {
+    const st = _statIntent(userMsg);
+    if (st.best && st.sim >= 0.34 && (st.sim - st.sim2) >= 0.05) {
+      intents = [st.best];
+    } else if (st.best && st.sim >= 0.20 && st.second) {
+      _NLU_CTX = { intent: _NLU_CTX.intent, slots: Object.assign({}, _NLU_CTX.slots || {}, slotsNew), ts: Date.now(), pendingChoice: [st.best, st.second], pendingSlot: null };
+      return "Ich bin nicht ganz sicher, was du meinst — geht es um:\n\n" +
+        "**1️⃣ " + (_INTENT_LABELS[st.best] || st.best) + "** oder **2️⃣ " + (_INTENT_LABELS[st.second] || st.second) + "**?\n\n" +
+        "Antworte einfach mit **1** oder **2** (oder formuliere die Frage neu)." + _TAG;
+    }
+  }
+
   // 5. Fuzzy-Stufe 3 (Tippfehler) — nur wenn immer noch nichts erkannt
   let fuzzyHinweis = "";
   if (intents[0] === "default") {
@@ -3540,14 +4368,14 @@ function deterministicSteuerAntwort(userMsg, { tweaks = {}, state = {}, investme
   const istVergleich = /\b(oder|vs\.?|versus|statt|im vergleich (zu|mit))\b/.test(String(userMsg).toLowerCase());
   if (istVergleich && slots.bruttoList && slots.bruttoList.length >= 2 && (intents.includes("bruttoNetto") || intents[0] === "default" || intents.includes("optimieren"))) {
     const cmp = _h_vergleichBrutto(slots.bruttoList, p, yr, K);
-    if (cmp) { _NLU_CTX = { intent: "bruttoNetto", slots, ts: Date.now() }; return jahrHinweis + cmp; }
+    if (cmp) { _NLU_CTX = { intent: "bruttoNetto", slots, ts: Date.now(), pendingChoice: null, pendingSlot: null }; return jahrHinweis + cmp; }
   }
   if (slots.bruttoList && slots.bruttoList.length >= 2 && intents.includes("steuerklasse")) {
     const cmpSK = _h_vergleichSK(slots.bruttoList[slots.bruttoList.length - 1], slots.bruttoList[0], p, yr, K);
-    if (cmpSK) { _NLU_CTX = { intent: "steuerklasse", slots, ts: Date.now() }; return jahrHinweis + cmpSK; }
+    if (cmpSK) { _NLU_CTX = { intent: "steuerklasse", slots, ts: Date.now(), pendingChoice: null, pendingSlot: null }; return jahrHinweis + cmpSK; }
   }
   if (istVergleich && slots.kmList && slots.kmList.length >= 2 && (intents.includes("pendler") || intents[0] === "default")) {
-    _NLU_CTX = { intent: "pendler", slots, ts: Date.now() };
+    _NLU_CTX = { intent: "pendler", slots, ts: Date.now(), pendingChoice: null, pendingSlot: null };
     return jahrHinweis + _h_vergleichKm(slots.kmList, p, yr, K);
   }
 
@@ -3563,6 +4391,17 @@ function deterministicSteuerAntwort(userMsg, { tweaks = {}, state = {}, investme
   if (fragtWo) {
     const zIntent = intents.find((i) => _ELSTER_ZEILEN[i]);
     if (zIntent) prefix += `📌 **Direktantwort:** ${_ELSTER_ZEILEN[zIntent]}\n\n`;
+  }
+
+  // 10b. Slot-Filling: Pflicht-Wert fehlt → konkret nachfragen statt nur
+  //      auf das Interview zu verweisen (eine Zahl als Antwort genügt)
+  if (intents.length === 1 && _REQUIRED_SLOTS[intents[0]]) {
+    const req = _REQUIRED_SLOTS[intents[0]];
+    if (!req.check(p)) {
+      _NLU_CTX = { intent: intents[0], slots, ts: Date.now(), pendingChoice: null, pendingSlot: { intent: intents[0], slot: req.slot } };
+      return prefix + "**" + _INTENT_LABELS[intents[0]] + "** — dafür fehlt mir noch ein Wert:\n\n" + req.frage +
+        "\n\n*(Alternativ: Interview 📋 ausfüllen, dann merke ich mir das dauerhaft.)*" + _TAG;
+    }
   }
 
   // 11. Dispatch (Einzel- oder Multi-Intent)
@@ -3581,7 +4420,7 @@ function deterministicSteuerAntwort(userMsg, { tweaks = {}, state = {}, investme
   // 12. Kontext für Folgefragen merken
   const primary = intents[0];
   if (primary !== "default" && primary !== "hilfe") {
-    _NLU_CTX = { intent: primary, slots, ts: Date.now() };
+    _NLU_CTX = { intent: primary, slots, ts: Date.now(), pendingChoice: null, pendingSlot: null };
   }
   return prefix + antwort;
 }

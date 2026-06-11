@@ -564,7 +564,7 @@ function buildUserProfile(interviewAnswers, tweaks) {
   // NEU: Feature 2 — Bundesland bevorzugt aus Interview, Fallback tweaks
   const bundesland     = ia.bundesland || t.bundesland || "default";
   const steuerklasse   = Number(t.steuerklasse) || 1;
-  const brutto         = Number(ia.brutto) || 0;
+  const brutto         = Number(ia.brutto) || Number(ia.jahresbrutto) || 0;
   // NEU: Feature 2 — kirchenmitglied aus Interview oder tweaks
   const kirchenmitglied = !!ia.kirchenmitglied || !!t.kirchensteuer;
 

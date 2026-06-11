@@ -105,7 +105,9 @@ function _calcPreciseGST(profileOrBrutto, year) {
   const riester_abzug = Math.min(Number(ia.riester_eigenanteil) || 0, _riesterMaxSA);
 
   let zvE = brutto - sv - wkP - saP - kv_abzug - riester_abzug;
-  zvE = Math.max(0, zvE - gf);
+  // BUGFIX: Grundfreibetrag NICHT vorab abziehen — § 32a-Tarif (calcESt)
+  // berücksichtigt ihn bereits. Doppelabzug drückte den GST künstlich.
+  zvE = Math.max(0, zvE);
 
   const gst = calcGrenzsteuersatz(zvE, String(yr));
   return Math.min(0.45, Math.max(0.14, gst));
@@ -1333,6 +1335,165 @@ function findOpportunities(profile, receipts, investments, year) {
 // UI-Komponenten
 // ════════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════════
+// OPTIMIERUNGS-ENGINE v2 — exakte sequenzielle Simulation
+//
+// Bisher: Ersparnis je Maßnahme = Betrag × Grenzsteuersatz, Gesamtsumme =
+// naive Addition. Das ignoriert zwei Effekte:
+//   (a) WK-Maßnahmen wirken erst OBERHALB der 1.230-€-Pauschale (gemeinsam!)
+//   (b) Jede Maßnahme senkt das zvE → der Grenzsteuersatz der NÄCHSTEN
+//       Maßnahme ist niedriger (Progression)
+//
+// simulateOptimalPlan() rechnet stattdessen exakt über den § 32a-Tarif:
+// Greedy-Auswahl — in jeder Runde wird die Maßnahme mit der höchsten
+// tatsächlichen Steuer-Differenz (calcESt vorher − nachher) gewählt und
+// das zvE fortgeschrieben. Ergebnis: realistische €-Beträge je Maßnahme,
+// korrekte Reihenfolge und ein ehrliches Gesamtpotenzial.
+// ════════════════════════════════════════════════════════════════════════
+
+// Maßnahmen-Typologie: wie wirkt eine Opportunity steuerlich?
+//   wk      → Werbungskosten-Pool (erst über Pauschale wirksam)
+//   abzug   → senkt zvE direkt (Sonderausgaben, Vorsorge, agB …)
+//   credit  → direkte Steuerermäßigung (§ 35a) — 1:1 von der Steuer
+//   fix     → eigener Rechenweg (KapESt, Zulagen, Erstattungen) — op.ersparnis übernehmen
+const _OP_WIRKUNG = {
+  pendler: "wk", homeoffice: "wk", arbeitsmittel: "wk", werbungskosten: "wk",
+  fortbildung: "wk", doppelte_haushaltsfuehrung: "wk", umzug: "wk",
+  sonderausgaben: "abzug", vorsorge: "abzug", riester: "abzug", ruerup: "abzug",
+  spenden: "abzug", ausbildung: "abzug", unterhalt: "abzug",
+  aussergewoehnlich: "abzug", behinderung: "abzug",
+  haushaltsnahe: "credit", handwerker: "credit",
+};
+
+function _opWirkung(op) {
+  if (_OP_WIRKUNG[op.kategorie]) return _OP_WIRKUNG[op.kategorie];
+  const id = String(op.id || "");
+  if (/pendler|homeoffice|arbeitsmittel|werbungskosten|fortbildung|doppelte/.test(id)) return "wk";
+  if (/riester|ruerup|vorsorge|spende|sonderausgab|unterhalt|aussergew|behinder|kv_/.test(id)) return "abzug";
+  if (/haushalt|handwerk|35a/.test(id)) return "credit";
+  return "fix";
+}
+
+// Abzugsbetrag (Bemessungsgrundlage) einer Maßnahme rekonstruieren:
+// detail_zahlen/betrag wenn vorhanden, sonst ersparnis ÷ angenommener GST.
+function _opAbzug(op, gstAnnahme) {
+  if (Number(op.abzugsbetrag) > 0) return Number(op.abzugsbetrag);
+  if (Number(op.betrag) > 0) return Number(op.betrag);
+  const g = Math.max(0.14, Math.min(0.45, gstAnnahme || 0.30));
+  return Math.round((op.ersparnis || 0) / g);
+}
+
+/**
+ * simulateOptimalPlan(profile, ops, year)
+ * → { plan: [{op, exakt, kumulativ, wirkung}], gesamtExakt, gesamtNaiv,
+ *     zvE_vorher, zvE_nachher, steuer_vorher, steuer_nachher, gstVerlauf }
+ */
+function simulateOptimalPlan(profile, ops, year) {
+  const yr = Number(year) || new Date().getFullYear();
+  if (typeof calcESt !== "function" || typeof getK !== "function") return null;
+  const K = getK(yr);
+  const brutto = profile?.brutto || 0;
+  if (!brutto) return null;
+  const ia = profile?._ia || {};
+
+  // ── Basis-zvE wie in _calcPreciseGST (SV-Kappung, echte Vorsorge) ──
+  const bbg_kv = K.bbg_kv_monatlich * 12, bbg_rv = K.bbg_rv_monatlich * 12;
+  const svCfg = (window.TAX_CONFIG_RAW || {}).sv_saetze_an || {};
+  const sv = Math.round(
+    Math.min(brutto, bbg_kv) * (svCfg.kv || 0.0735) +
+    Math.min(brutto, bbg_rv) * ((svCfg.rv || 0.093) + (svCfg.alv || 0.013)) +
+    Math.min(brutto, bbg_kv) * (svCfg.pv || 0.018)
+  );
+  const kvAbzug = Number(ia.kv_beitrag_jahres) || 0;
+
+  // Bereits vorhandene Werbungskosten aus dem Profil (Pendler + Homeoffice):
+  // Sie stecken im Basis-zvE und füllen den WK-Pool VOR den Maßnahmen —
+  // sonst würde die Pauschalen-Schwelle doppelt angesetzt.
+  const _km    = Number(ia.arbeitsweg_km) || Number(ia.entfernung_km) || 0;
+  const _hoT   = Math.min(Number(ia.homeoffice_tage) || 0, K.homeoffice_max_tage || 210);
+  const _aTage = Math.max(0, (Number(ia.arbeitstage) || Number(ia.buerotage) || 220) - _hoT);
+  let wkVorhanden = 0;
+  if (_km > 0 && _aTage > 0) {
+    const yrN = Number(yr);
+    wkVorhanden += yrN >= 2026
+      ? Math.round(_aTage * _km * (K.entfernung_km_ab_21 || 0.38))
+      : Math.round(_aTage * (Math.min(_km, 20) * (K.entfernung_km_bis_20 || 0.30) + Math.max(0, _km - 20) * (K.entfernung_km_ab_21 || 0.38)));
+  }
+  wkVorhanden += _hoT * (K.homeoffice_pro_tag || 6);
+
+  // zvE VOR den Maßnahmen — Grundfreibetrag NICHT abziehen (steckt im Tarif)
+  let zvE0 = Math.max(0, brutto - sv - Math.max(K.wk_pauschale, wkVorhanden) - K.sonderausgaben_pauschale - kvAbzug);
+
+  const kandidaten = (ops || []).filter((o) => o && !o.__noData && (o.ersparnis || 0) > 0 && o.status !== "done");
+  const gesamtNaiv = kandidaten.reduce((s, o) => s + (o.ersparnis || 0), 0);
+
+  // WK-Pool: Pauschale ist im Basis-zvE bereits drin → WK-Maßnahmen wirken
+  // erst, wenn die SUMME der Einzel-WK die Pauschale übersteigt.
+  let wkSumme = wkVorhanden;  // Profil-WK zählen bereits in den Pool
+  let zvE = zvE0;
+  const steuer0 = calcESt(zvE0, yr);
+  const gstStart = calcGrenzsteuersatz(zvE0, String(yr));
+
+  // Marginale Steuerwirkung einer Maßnahme im AKTUELLEN Zustand
+  function deltaFor(op) {
+    const wirk = _opWirkung(op);
+    // Pendler/Homeoffice sind bereits über das Profil im Basis-zvE enthalten
+    if (wirk === "wk" && wkVorhanden > 0 && /homeoffice|pendler/.test(String(op.id || ""))) {
+      return { delta: 0, wirk: "wk", abzug: 0 };
+    }
+    if (wirk === "credit") return { delta: Math.round(op.ersparnis || 0), wirk, abzug: 0 };
+    if (wirk === "fix")    return { delta: Math.round(op.ersparnis || 0), wirk, abzug: 0 };
+    const abzug = _opAbzug(op, gstStart);
+    if (abzug <= 0) return { delta: 0, wirk, abzug: 0 };
+    let wirksam = abzug;
+    if (wirk === "wk") {
+      // Nur der Teil oberhalb der (noch nicht ausgeschöpften) Pauschale wirkt
+      const neuerPool = wkSumme + abzug;
+      wirksam = Math.max(0, neuerPool - Math.max(wkSumme, K.wk_pauschale));
+    }
+    if (wirksam <= 0) return { delta: 0, wirk, abzug };
+    const delta = calcESt(zvE, yr) - calcESt(Math.max(0, zvE - wirksam), yr);
+    return { delta: Math.round(delta), wirk, abzug, wirksam };
+  }
+
+  // Greedy: in jeder Runde die Maßnahme mit höchstem exakten Delta
+  const plan = [];
+  const rest = kandidaten.slice();
+  let kumulativ = 0;
+  let guard = 0;
+  while (rest.length > 0 && guard++ < 200) {
+    let bestIdx = -1, best = null;
+    for (let i = 0; i < rest.length; i++) {
+      const d = deltaFor(rest[i]);
+      if (!best || d.delta > best.delta) { best = d; bestIdx = i; }
+    }
+    if (!best || best.delta <= 0) {
+      // Restliche Maßnahmen ohne (weitere) Wirkung — als 0-€-Hinweise anhängen
+      for (const op of rest) plan.push({ op, exakt: 0, kumulativ, wirkung: _opWirkung(op) });
+      break;
+    }
+    const op = rest.splice(bestIdx, 1)[0];
+    // Zustand fortschreiben
+    if (best.wirk === "wk")    { wkSumme += best.abzug; zvE = Math.max(0, zvE - (best.wirksam || 0)); }
+    if (best.wirk === "abzug") { zvE = Math.max(0, zvE - best.abzug); }
+    kumulativ += best.delta;
+    plan.push({ op, exakt: best.delta, kumulativ, wirkung: best.wirk });
+  }
+
+  const steuer1 = calcESt(zvE, yr);
+  const creditsFix = plan.filter((x) => x.wirkung === "credit" || x.wirkung === "fix")
+                         .reduce((s, x) => s + x.exakt, 0);
+  return {
+    plan,
+    gesamtExakt: (steuer0 - steuer1) + creditsFix,
+    gesamtNaiv,
+    zvE_vorher: zvE0, zvE_nachher: zvE,
+    steuer_vorher: steuer0, steuer_nachher: steuer1,
+    gst_vorher: Math.round(gstStart * 100),
+    gst_nachher: Math.round(calcGrenzsteuersatz(zvE, String(yr)) * 100),
+  };
+}
+
 const KATEGORIE_LABELS = {
   werbungskosten:    "Werbungskosten",
   sonderausgaben:    "Sonderausgaben",
@@ -1618,7 +1779,7 @@ function OptimizerFAB({ count = 0, onClick }) {
 // ── Sicherheits-Export: nicht überschreibbar ────────────────────────────
 // ════════════════════════════════════════════════════════════════════════
 (function _secureExport() {
-  const defs = { findOpportunities, TaxOptimizer, OptimizerFAB };
+  const defs = { findOpportunities, simulateOptimalPlan, TaxOptimizer, OptimizerFAB };
   for (const [k, v] of Object.entries(defs)) {
     try {
       Object.defineProperty(window, k, {

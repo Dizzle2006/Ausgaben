@@ -385,7 +385,7 @@ function useTaxConfig() {
 // ────────────────────────────────────────────────────────────────────────
 // _calcEStRaw — § 32a EStG ohne Rundung (Basis für exakten Grenzsteuersatz)
 function _calcEStRaw(zve, year) {
-  const K  = getK(year);
+  const K = getK(year);
   const gf = K.grundfreibetrag;
   zve = Math.max(0, zve);
   if (zve <= gf) return 0;
@@ -402,7 +402,6 @@ function _calcEStRaw(zve, year) {
   }
   return 0.45 * zve - K.flat45_abzug;
 }
-
 function calcESt(zve, year) {
   // Gerundetes Ergebnis (Anzeige/Abzüge); Tarifformel in _calcEStRaw
   return Math.round(_calcEStRaw(Math.round(Number(zve) || 0), year));
@@ -472,9 +471,7 @@ function calcBruttoNetto({
   // Milderungszone § 4 S. 2 SolzG: oberhalb der Freigrenze max. 11,9 % des
   // übersteigenden Betrags — kein harter Sprung mehr auf volle 5,5 %.
   const soli_mild = K.soli_milderung_satz ?? 0.119;
-  const soli = lohnsteuer > soli_fg
-    ? Math.round(Math.min(lohnsteuer * K.soli_satz, (lohnsteuer - soli_fg) * soli_mild))
-    : 0;
+  const soli = lohnsteuer > soli_fg ? Math.round(Math.min(lohnsteuer * K.soli_satz, (lohnsteuer - soli_fg) * soli_mild)) : 0;
   const kst_satz = K.kirchensteuer_satz[bundesland] || K.kirchensteuer_satz.default;
   const kst = kirchensteuer ? Math.round(lohnsteuer * kst_satz) : 0;
   const abzuege = sv + lohnsteuer + soli + kst;
@@ -616,7 +613,7 @@ function buildUserProfile(interviewAnswers, tweaks) {
   // NEU: Feature 2 — Bundesland bevorzugt aus Interview, Fallback tweaks
   const bundesland = ia.bundesland || t.bundesland || "default";
   const steuerklasse = Number(t.steuerklasse) || 1;
-  const brutto = Number(ia.brutto) || 0;
+  const brutto = Number(ia.brutto) || Number(ia.jahresbrutto) || 0;
   // NEU: Feature 2 — kirchenmitglied aus Interview oder tweaks
   const kirchenmitglied = !!ia.kirchenmitglied || !!t.kirchensteuer;
   const istStudent = ["student_dual", "student_trial", "student_voll"].includes(beschaeftigung);
