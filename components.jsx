@@ -129,16 +129,8 @@ function VariableRow({ item, total, entryCount, onUpdate, onDelete, onOpen }) {
             onClick={openLimitEdit}
             title={hasLimit ? `Limit: ${fmtEUR(limit)} – klicken zum Ändern` : "Budget-Limit setzen"}
             style={{
-              border: "none",
               background: hasLimit ? isOver ? "var(--danger-soft)" : isWarn ? "oklch(0.95 0.04 75)" : "var(--accent-soft)" : "var(--surface-2)",
               color: hasLimit ? isOver ? "var(--danger)" : isWarn ? "var(--warning)" : "var(--accent)" : "var(--text-faint)",
-              borderRadius: 6,
-              padding: "3px 8px",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-              fontVariantNumeric: "tabular-nums"
             }}>
             
               {hasLimit ? `${fmtEUR(total)} / ${fmtEUR(limit)}` : "+ Limit"}

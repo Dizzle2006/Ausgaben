@@ -26,7 +26,16 @@ const fmtDate = (iso) => {
   return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
 };
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+// Lokales Datum (nicht UTC!) als YYYY-MM-DD — toISOString() würde nachts
+// (zwischen 00:00 und 01:00/02:00 Uhr Lokalzeit) noch den Vortag liefern
+// und neue Einträge dadurch dem falschen Tag im Tagesausgaben-Raster zuordnen.
+const todayISO = () => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
 
 // Liest die Budget-Perioden-Einstellung (Kalendermonat vs. eigener Zeitraum
 // ab einem festen Starttag, z.B. Gehaltseingang am 11.) aus den persistierten
@@ -680,7 +689,7 @@ const exportState = async (state) => {
   const blob = new Blob([json], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   a.href = url;
   a.download = `ausgaben-export-${today}.json`;
   document.body.appendChild(a);
