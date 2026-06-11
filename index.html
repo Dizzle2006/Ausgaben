@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Content Security Policy:
+       - script-src: nur 'self' + unpkg.com (React-CDN)
+       - connect-src: lokales Ollama (Mac + iPhone-Heimnetz)
+       - Alle anderen Verbindungen geblockt — keine Daten verlassen das Gerät -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com http://localhost:11434 http://127.0.0.1:11434 http: blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Ausgaben Trocken</title>
+  <meta name="description" content="Persönliches Budget & Investment-Tracker" />
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#f1ead8" />
+
+  <!-- iOS / Safari -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Ausgaben" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png" />
+
+  <!-- Favicons -->
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="icons/favicon-64.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+
+  <!-- Fonts & Styles -->
+  <link rel="stylesheet" href="fonts/fonts.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React 18 via CDN (unpkg.com — durch CSP auf diese Domain beschränkt).
+       Für vollständige Offline-Nutzung: einmalig "npm run build" im Projektordner
+       ausführen — lädt React in dist/libs/ und entfernt CDN-Abhängigkeit. -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+
+  <!-- Hinweis: Im Entwicklungsmodus werden .jsx-Dateien durch Babel transpiliert.
+       Für die Produktion: "npm run build" → dist/ deployen -->
+  <script src="tweaks-panel.js"></script>
+  <script src="idb.js"></script>
+  <script src="utils.js"></script>
+  <script src="tax-engine.js"></script>
+  <script src="elster-export.js"></script>
+  <script src="tax-fristen.js"></script>
+  <script src="tax-interview.js"></script>
+  <script src="tax-einspruch.js"></script>
+  <script src="components.js"></script>
+  <script src="detail.js"></script>
+  <script src="investments.js"></script>
+  <script src="scanner-patches.js"></script>
+  <script src="scanner.js"></script>
+  <script src="crypto.js"></script>
+  <script src="steuerbot.js"></script>
+  <script src="budgetbot.js"></script>
+  <script src="tax-optimizer.js"></script>
+  <script src="budget-heatmap.js"></script>
+  <script src="monatsarchiv.js"></script>
+  <script src="app.js"></script>
+  <script src="sw-register.js"></script>
+</body>
+</html>

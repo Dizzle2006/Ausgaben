@@ -1,0 +1,11 @@
+# Abhängigkeiten — werden via npm install wiederhergestellt
+node_modules/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+npm-debug.log*

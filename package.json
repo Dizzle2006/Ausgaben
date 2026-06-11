@@ -1,0 +1,16 @@
+{
+  "name": "ausgaben-trocken",
+  "version": "2.1.0",
+  "description": "Persönlicher Budget- & Steuer-Tracker (PWA)",
+  "private": true,
+  "scripts": {
+    "build": "bash build.sh",
+    "dev": "echo 'Entwicklung: Dateien direkt bearbeiten, dann npm run build'",
+    "fetch-fonts": "bash fetch-fonts.sh"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.24.0",
+    "@babel/core": "^7.24.0",
+    "@babel/preset-react": "^7.24.0"
+  }
+}
