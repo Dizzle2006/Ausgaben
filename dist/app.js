@@ -3350,7 +3350,7 @@ function SettingsSheet({
     className: "settings-row-title"
   }, "Starttag"), /*#__PURE__*/React.createElement("div", {
     className: "settings-row-sub"
-  }, "Zeitraum l\xE4uft vom ", tweaks.budgetPeriodStartDay, ". bis zum ", tweaks.budgetPeriodStartDay, ". des Folgemonats \u2014 z. B. ab dem Tag deines Gehaltseingangs")), /*#__PURE__*/React.createElement("input", {
+  }, "Zeitraum l\xE4uft vom ", tweaks.budgetPeriodStartDay, ". bis zum ", tweaks.budgetPeriodStartDay, ". des Folgemonats \u2014 z. B. ab dem Tag deines Gehaltseingangs. F\xE4llt dieser Tag auf ein Wochenende, verschiebt sich der Periodenstart automatisch auf den n\xE4chsten Werktag (Montag).")), /*#__PURE__*/React.createElement("input", {
     type: "number",
     min: "1",
     max: "28",

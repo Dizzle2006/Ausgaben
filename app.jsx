@@ -2698,7 +2698,7 @@ function SettingsSheet({
                     <div className="settings-row-text">
                       <div className="settings-row-title">Starttag</div>
                       <div className="settings-row-sub">
-                        Zeitraum läuft vom {tweaks.budgetPeriodStartDay}. bis zum {tweaks.budgetPeriodStartDay}. des Folgemonats — z. B. ab dem Tag deines Gehaltseingangs
+                        Zeitraum läuft vom {tweaks.budgetPeriodStartDay}. bis zum {tweaks.budgetPeriodStartDay}. des Folgemonats — z. B. ab dem Tag deines Gehaltseingangs. Fällt dieser Tag auf ein Wochenende, verschiebt sich der Periodenstart automatisch auf den nächsten Werktag (Montag).
                       </div>
                     </div>
                     <input type="number" min="1" max="28" inputMode="numeric"

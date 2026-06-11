@@ -1,4 +1,4 @@
-/* global React, fmtEUR, monthLabel */
+/* global React, fmtEUR, monthLabel, getPeriodRange */
 
 // ═══════════════════════════════════════════════════════════
 // BudgetHeatmap — Tagesausgaben-Kalender für den Budget-Tab
@@ -13,18 +13,19 @@ function BudgetHeatmap({
   monthBudget = 0,
   budgetPeriod
 }) {
-  const [y, m] = monthYM.split("-").map(Number);
   const period = budgetPeriod && budgetPeriod.mode === "custom" && budgetPeriod.startDay > 1 ? budgetPeriod : {
     mode: "calendar",
     startDay: 1
   };
 
-  // Periodenstart (z.B. 12. des Monats statt 1.) — Periodenlänge entspricht
-  // immer der Tageszahl des Startmonats, auch wenn die Periode in den
-  // Folgemonat hineinläuft.
-  const periodStart = new Date(y, m - 1, period.startDay);
+  // Periodenstart/-ende (z.B. 12. des Monats statt 1., ggf. wochenend-korrigiert).
+  // Die Periodenlänge ergibt sich aus dem tatsächlichen Abstand der beiden
+  // Stichtage und kann daher leicht von der Kalendermonatslänge abweichen.
+  const {
+    start: periodStart,
+    lengthDays: daysInMonth
+  } = getPeriodRange(monthYM, period);
   const periodStartMs = periodStart.getTime();
-  const daysInMonth = new Date(y, m, 0).getDate();
   // Erster Wochentag (Mo=0 ... So=6) — Date.getDay() liefert So=0..Sa=6
   const firstWeekday = (periodStart.getDay() + 6) % 7;
   const dailyBudget = monthBudget > 0 ? monthBudget / daysInMonth : 0;

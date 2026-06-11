@@ -48,14 +48,51 @@ const _getBudgetPeriod = () => {
   };
 };
 
+// Effektiver Periodenstart für Monat (y, m): bei "custom" wird der konfigurierte
+// Starttag genommen, fällt dieser aber auf Sa/So, rückt der Beginn auf den
+// nächsten Werktag (Mo) vor — Gehalt kommt bei Wochenend-Stichtagen oft erst
+// am folgenden Bankarbeitstag. Ein Rollover über das Monatsende hinaus (nur bei
+// Starttag 28 in einem Februar mit Wochenende möglich) wird auf den letzten
+// Tag des Monats begrenzt.
+const _periodStartDate = (y, m, period) => {
+  if (!period || period.mode !== "custom" || period.startDay <= 1) {
+    return new Date(y, m - 1, 1);
+  }
+  const daysInM = new Date(y, m, 0).getDate();
+  const day = Math.min(period.startDay, daysInM);
+  const d = new Date(y, m - 1, day);
+  const weekday = d.getDay(); // 0=So ... 6=Sa
+  if (weekday === 6) d.setDate(d.getDate() + 2); // Sa -> Mo
+  else if (weekday === 0) d.setDate(d.getDate() + 1); // So -> Mo
+  if (d.getMonth() !== m - 1) return new Date(y, m - 1, daysInM);
+  return d;
+};
+
+// Start- und Enddatum sowie Länge (in Tagen) des Budget-Zeitraums für ym.
 // cfg optional: { mode: "calendar"|"custom", startDay }. Ohne cfg wird die
 // persistierte Einstellung gelesen (für Aufrufer ohne React-State-Zugriff).
+const getPeriodRange = (ym, cfg) => {
+  const [y, m] = ym.split("-").map(Number);
+  const period = cfg || _getBudgetPeriod();
+  const start = _periodStartDate(y, m, period);
+  const nextM = m === 12 ? 1 : m + 1;
+  const nextY = m === 12 ? y + 1 : y;
+  const end = _periodStartDate(nextY, nextM, period);
+  const lengthDays = Math.round((end.getTime() - start.getTime()) / 86400000);
+  return {
+    start,
+    end,
+    lengthDays
+  };
+};
 const monthLabel = (ym, cfg) => {
   const [y, m] = ym.split("-").map(Number);
   const period = cfg || _getBudgetPeriod();
   if (period.mode === "custom" && period.startDay > 1) {
-    const start = new Date(y, m - 1, period.startDay);
-    const end = new Date(y, m, period.startDay);
+    const {
+      start,
+      end
+    } = getPeriodRange(ym, period);
     const dayMonth = d => `${d.getDate()}. ${d.toLocaleDateString("de-DE", {
       month: "long"
     })}`;
@@ -74,13 +111,20 @@ const shiftMonth = (ym, delta) => {
 };
 
 // Liefert das YM des aktuell laufenden Budget-Zeitraums. Bei "custom" mit
-// Starttag X läuft der Zeitraum vom X. bis zum X. des Folgemonats — vor
-// dem Starttag gehört "heute" also noch zum YM des Vormonats.
+// Starttag X läuft der Zeitraum vom X. (ggf. wochenend-korrigiert) bis zum
+// entsprechenden Tag des Folgemonats — vor dem Periodenstart gehört "heute"
+// also noch zum YM des Vormonats.
 const currentYM = () => {
   const d = new Date();
   const period = _getBudgetPeriod();
-  if (period.mode === "custom" && d.getDate() < period.startDay) {
-    d.setMonth(d.getMonth() - 1);
+  if (period.mode === "custom") {
+    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const {
+      start
+    } = getPeriodRange(ym, period);
+    if (d.getTime() < start.getTime()) {
+      d.setMonth(d.getMonth() - 1);
+    }
   }
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
@@ -1228,6 +1272,7 @@ async function ollamaTest(url, model) {
     fmtDate,
     todayISO,
     monthLabel,
+    getPeriodRange,
     shiftMonth,
     currentYM,
     Icon,
