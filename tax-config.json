@@ -1,0 +1,163 @@
+{
+  "meta": {
+    "letzte_aktualisierung": "2026-06-11",
+    "quellen": [
+      "BMF Grundfreibetrag 2024-2026",
+      "Steueränderungsgesetz 2025",
+      "Finanztip, Steuertipps.de (verifiziert Mai 2026)",
+      "§32a EStG 2026 (Steuerfortentwicklungsgesetz, verifiziert Mai 2026)",
+      "§10a EStG Riester-Rente (Günstigerprüfung)",
+      "§10 Abs.1 Nr.2 EStG Basisrente (Rürup) 2026",
+      "§10 Abs.3 EStG (JStG 2022): Rürup-Vollabzug 100% ab VZ 2023; BBG RV West 2026 × 18,6% = Höchstbetrag 29.344 €",
+      "§ 4 S. 2 SolzG 1995 — Milderungszone 11,9 % (ergänzt Juni 2026)"
+    ]
+  },
+  "grundfreibetrag": {
+    "2024": 11784,
+    "2025": 12096,
+    "2026": 12348
+  },
+  "werbungskostenpauschale": {
+    "2024": 1230,
+    "2025": 1230,
+    "2026": 1230,
+    "hinweis_2026": "Gewerkschaftsbeiträge ab 2026 immer absetzbar, auch unter Pauschale"
+  },
+  "entfernungspauschale": {
+    "bis_2025": {
+      "km_1_bis_20": 0.3,
+      "ab_km_21": 0.38
+    },
+    "ab_2026": {
+      "ab_km_1": 0.38,
+      "hinweis": "Vereinheitlichung ab erstem Kilometer"
+    }
+  },
+  "minijob_grenze_monatlich": {
+    "2024": 538,
+    "2025": 556,
+    "2026": 603
+  },
+  "sparerpauschbetrag": {
+    "single": 1000,
+    "verheiratet": 2000
+  },
+  "soli_freigrenze_einzelveranlagung": {
+    "2024": 18130,
+    "2025": 19950,
+    "2026": 20350
+  },
+  "kindergeld_monatlich": {
+    "bis_2025": 255,
+    "ab_2026": 259
+  },
+  "kinderfreibetrag_gesamt_2026": 9756,
+  "kapitalertragsteuer_satz": 0.25,
+  "soli_satz": 0.055,
+  "homeoffice": {
+    "pauschale_pro_tag": 6,
+    "max_tage": 210,
+    "max_jahresbetrag": 1260
+  },
+  "haushaltsnahe_dienstleistungen": {
+    "max_ermaessigung": 4000,
+    "max_aufwendungen": 20000
+  },
+  "handwerkerleistungen": {
+    "max_ermaessigung": 1200,
+    "max_arbeitskosten": 6000
+  },
+  "minijob_haushalt": {
+    "max_ermaessigung": 510
+  },
+  "kirchensteuer_satz": {
+    "BY": 0.08,
+    "BW": 0.08,
+    "default": 0.09
+  },
+  "studenten": {
+    "erststudium_sonderausgaben_max": 6000,
+    "laptop_sofortabschreibung_seit": 2021,
+    "laptop_mindestnutzung_prozent": 10,
+    "verpflegung_pauschale_8h": 14,
+    "verpflegung_pauschale_24h": 28,
+    "verlustvortrag_rueckwirkend_jahre": 7,
+    "freiwillige_abgabe_rueckwirkend_jahre": 4,
+    "kindergeld_eltern_altersgrenze": 25,
+    "kindergeld_einkommensgrenze_student": 15500
+  },
+  "tarifzonen": {
+    "2024": {
+      "zone1_ende": 17005,
+      "zone2_ende": 66760,
+      "zone3_ende": 277825,
+      "k1a": 979.18,
+      "k1b": 1400,
+      "k2a": 192.59,
+      "k2b": 2397,
+      "k2c": 966.53,
+      "flat42_abzug": 10379,
+      "flat45_abzug": 18714
+    },
+    "2025": {
+      "zone1_ende": 17443,
+      "zone2_ende": 68480,
+      "zone3_ende": 277825,
+      "k1a": 979.18,
+      "k1b": 1400,
+      "k2a": 192.59,
+      "k2b": 2397,
+      "k2c": 966.53,
+      "flat42_abzug": 10602,
+      "flat45_abzug": 18936
+    },
+    "2026": {
+      "zone1_ende": 17799,
+      "zone2_ende": 69878,
+      "zone3_ende": 277825,
+      "k1a": 979.18,
+      "k1b": 1400,
+      "k2a": 181.19,
+      "k2b": 2397,
+      "k2c": 1025.38,
+      "flat42_abzug": 10637.32,
+      "flat45_abzug": 18919.93
+    }
+  },
+  "beitragsbemessungsgrenze": {
+    "2024": {
+      "kv_pv_monatlich": 5175,
+      "rv_monatlich": 7550
+    },
+    "2025": {
+      "kv_pv_monatlich": 5512,
+      "rv_monatlich": 8050
+    },
+    "2026": {
+      "kv_pv_monatlich": 5775,
+      "rv_monatlich": 8400
+    }
+  },
+  "gwg_grenze_brutto": 952,
+  "riester": {
+    "grundzulage": 175,
+    "kinderzulage_ab_2008": 300,
+    "kinderzulage_vor_2008": 185,
+    "max_sa_abzug": 2100,
+    "mindestbeitrag_prozent": 0.04,
+    "mindestbeitrag_absolut": 60
+  },
+  "ruerup": {
+    "hoechstbetrag": 29344,
+    "abzugsprozent": 1
+  },
+  "steuerklasse_2_entlastungsbetrag": 4008,
+  "sv_saetze_an": {
+    "kv": 0.0735,
+    "rv": 0.093,
+    "alv": 0.013,
+    "pv": 0.018,
+    "pv_kinderlos": 0.023
+  },
+  "soli_milderung_satz": 0.119
+}
