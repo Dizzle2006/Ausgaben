@@ -1403,6 +1403,19 @@ function ReceiptsSection({
 
   // Neueste zuerst
   const sorted = useMemo(() => [...receipts].sort((a, b) => (b.datum || "").localeCompare(a.datum || "")), [receipts]);
+
+  // Nach Steuerkategorie gruppieren (Reihenfolge wie STEUER_KATEGORIEN, "Privat" zuletzt)
+  const grouped = useMemo(() => {
+    const byKat = {};
+    sorted.forEach(r => {
+      const katId = STEUER_KATEGORIEN.some(k => k.id === r.steuerkat) ? r.steuerkat : "privat";
+      (byKat[katId] = byKat[katId] || []).push(r);
+    });
+    return STEUER_KATEGORIEN.map(kat => ({
+      kat,
+      items: byKat[kat.id] || []
+    })).filter(g => g.items.length > 0);
+  }, [sorted]);
   return /*#__PURE__*/React.createElement("div", {
     className: "section"
   }, /*#__PURE__*/React.createElement("div", {
@@ -1461,7 +1474,24 @@ function ReceiptsSection({
     className: "receipts-empty"
   }, /*#__PURE__*/React.createElement(Icon.Receipt, null), /*#__PURE__*/React.createElement("div", null, "Noch keine Belege f\xFCr diesen Monat."), /*#__PURE__*/React.createElement("div", {
     className: "sub"
-  }, "Mit dem Kamera-Button unten rechts hinzuf\xFCgen.")) : sorted.map(r => /*#__PURE__*/React.createElement(ReceiptRow, {
+  }, "Mit dem Kamera-Button unten rechts hinzuf\xFCgen.")) : grouped.map(({
+    kat,
+    items
+  }) => /*#__PURE__*/React.createElement(React.Fragment, {
+    key: kat.id
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "receipt-group-header"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "receipt-group-badge",
+    style: {
+      background: kat.bg,
+      color: kat.farbe
+    }
+  }, kat.kurz), /*#__PURE__*/React.createElement("span", {
+    className: "receipt-group-title"
+  }, kat.label), /*#__PURE__*/React.createElement("span", {
+    className: "receipt-group-count"
+  }, items.length)), items.map(r => /*#__PURE__*/React.createElement(ReceiptRow, {
     key: r.id,
     receipt: r,
     categoryLabel: catById[r.categoryId] || "—",
@@ -1469,7 +1499,7 @@ function ReceiptsSection({
     onDelete: () => {
       if (confirm(`Beleg „${r.haendler || "Unbekannt"}“ wirklich löschen?`)) onDelete(r.id);
     }
-  }))));
+  }))))));
 }
 function ReceiptRow({
   receipt,

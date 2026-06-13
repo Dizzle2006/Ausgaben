@@ -227,7 +227,12 @@ window.installOcrPackage = installOcrPackage;
 // Bildgröße — bei 1600px (Speicher-/Vorschaugröße) dauert ein Scan ein
 // Vielfaches länger als bei ~1000px, ohne dass die Texterkennung bei
 // typischen Kassenbons spürbar schlechter wird.
-async function _downscaleForOcr(dataUrl, maxDim = 1000) {
+// Verbessert das Bild für die Texterkennung: skaliert auf eine für OCR
+// sinnvolle Auflösung und wandelt es in kontrastreiche Graustufen um.
+// Kassenbons sind oft blass/grau gedruckt — Graustufen + Kontrastanhebung
+// verbessert die Tesseract-Trefferquote deutlich, ohne das Originalbild
+// (das gespeichert wird) zu verändern.
+async function _downscaleForOcr(dataUrl, maxDim = 1600) {
   try {
     const img = await new Promise((resolve, reject) => {
       const i = new Image();
@@ -239,19 +244,30 @@ async function _downscaleForOcr(dataUrl, maxDim = 1000) {
       width: w,
       height: h
     } = img;
-    if (Math.max(w, h) <= maxDim) return dataUrl;
-    if (w > h) {
-      h = Math.round(h * maxDim / w);
-      w = maxDim;
-    } else {
-      w = Math.round(w * maxDim / h);
-      h = maxDim;
+    if (Math.max(w, h) > maxDim) {
+      if (w > h) {
+        h = Math.round(h * maxDim / w);
+        w = maxDim;
+      } else {
+        w = Math.round(w * maxDim / h);
+        h = maxDim;
+      }
     }
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
-    canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-    return canvas.toDataURL("image/jpeg", 0.85);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, w, h);
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const px = imgData.data;
+    const contrast = 1.35;
+    for (let i = 0; i < px.length; i += 4) {
+      const gray = px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
+      const adjusted = Math.min(255, Math.max(0, (gray - 128) * contrast + 128));
+      px[i] = px[i + 1] = px[i + 2] = adjusted;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return canvas.toDataURL("image/jpeg", 0.92);
   } catch {
     return dataUrl; // Fallback: Original verwenden
   }
@@ -347,30 +363,38 @@ function parseReceiptText(rawText) {
     }
   }
 
-  // Schritt 3: Fallback – größte Zahl in Gesamt/Summe-Zeile
+  // Schritt 3: Fallback – größte Zahl in oder direkt nach einer
+  // Gesamt/Summe-Zeile (manche Kassenbons drucken den Betrag in der
+  // nächsten Zeile statt in derselben)
   if (!gesamtbetrag) {
-    for (const line of lines) {
-      if (/gesamt|summe|total|zu zahlen/i.test(line)) {
-        const nums = [...line.matchAll(/([\d]+[.,][\d]{2})/g)].map(x => parseDE(x[1]));
-        if (nums.length) {
-          gesamtbetrag = Math.max(...nums);
-          betragsConf = "mittel";
-          break;
+    for (let i = 0; i < lines.length; i++) {
+      if (/gesamt|summe|total|zu zahlen|endbetrag|zahlbetrag/i.test(lines[i])) {
+        const candidates = [lines[i], lines[i + 1] || ""];
+        for (const line of candidates) {
+          const nums = [...line.matchAll(/([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})/g)].map(x => parseDE(x[1]));
+          if (nums.length) {
+            gesamtbetrag = Math.max(...nums);
+            betragsConf = "mittel";
+            break;
+          }
         }
+        if (gesamtbetrag) break;
       }
     }
   }
 
   // ── MwSt 19% / 7% ──────────────────────────────────────────────
-  const MwSt19_RE = /(?:mwst\.?\s*19\s*%?|ust\.?\s*19\s*%?|19\s*%\s*mwst)[^\d\n]{0,25}([\d]+[.,][\d]{2})/i;
-  const MwSt7_RE = /(?:mwst\.?\s*7\s*%?|ust\.?\s*7\s*%?|7\s*%\s*mwst)[^\d\n]{0,25}([\d]+[.,][\d]{2})/i;
+  // Erlaubt Dezimal-Prozentangaben ("19,0%", "7,00 %") und Beträge in
+  // derselben Zeile vor oder nach der Prozentangabe.
+  const MwSt19_RE = /(?:mwst\.?\s*(?:a\s*)?19(?:[.,]\d+)?\s*%?|ust\.?\s*19(?:[.,]\d+)?\s*%?|19(?:[.,]\d+)?\s*%\s*(?:mwst|ust)?)[^\d\n]{0,25}([\d]+[.,][\d]{2})/i;
+  const MwSt7_RE = /(?:mwst\.?\s*(?:b\s*)?7(?:[.,]\d+)?\s*%?|ust\.?\s*7(?:[.,]\d+)?\s*%?|7(?:[.,]\d+)?\s*%\s*(?:mwst|ust)?)[^\d\n]{0,25}([\d]+[.,][\d]{2})/i;
   const m19 = rawText.match(MwSt19_RE);
   const m7 = rawText.match(MwSt7_RE);
   const mwst_19 = m19 ? parseDE(m19[1]) : 0;
   const mwst_7 = m7 ? parseDE(m7[1]) : 0;
 
   // ── Rechnungsnummer ─────────────────────────────────────────────
-  const RECH_RE = /(?:rechnungs(?:nummer|nr\.?|no\.?)|rechnung\s*#|invoice\s*(?:no\.?|nr\.?|#)|beleg(?:nr\.?|nummer)?)\s*:?\s*([A-Z0-9][A-Z0-9\-\/\.]{3,29})/i;
+  const RECH_RE = /(?:rechnungs(?:nummer|nr\.?|no\.?)|rechnung\s*#|invoice\s*(?:no\.?|nr\.?|#)|beleg(?:s?-?nr\.?|nummer)|bon(?:-?nr\.?|nummer)|kassenbon(?:-?nr\.?|nummer)?|trx[-\s]?nr\.?|transaktions(?:nr\.?|nummer)|vorgangs(?:nr\.?|nummer))\s*:?\s*#?\s*([A-Z0-9][A-Z0-9\-\/\.]{3,29})/i;
   const rechnm = rawText.match(RECH_RE);
   const rechnungsnummer = rechnm ? rechnm[1].trim() : null;
   const rechnConf = rechnungsnummer ? "hoch" : "niedrig";
@@ -569,6 +593,7 @@ async function analyzeReceiptLocal(imageDataUrl, mediaType, onProgress) {
   const rawText = await runOCR(imageDataUrl, onProgress);
   onProgress?.("Text wird ausgewertet…");
   const result = parseReceiptText(rawText);
+  result._rawText = rawText;
 
   // AutoKat-Vorhersage nur wenn Heuristik nichts erkannt hat (Default "privat")
   if (result.steuerkat === "privat" && window.AutoKat) {
@@ -828,6 +853,168 @@ function PreviewStep({
   }), /*#__PURE__*/React.createElement("span", null, statusText || "Wird analysiert…")) : /*#__PURE__*/React.createElement("span", null, "Beleg erkennen"))));
 }
 
+// ====================== Zuschneiden ======================
+// Lässt den Nutzer per Ziehen einen Ausschnitt des aufgenommenen/hochgeladenen
+// Bilds wählen (z.B. nur den Bon ohne Hintergrund). Arbeitet mit relativen
+// Koordinaten (0..1) bezogen auf die natürliche Bildgröße, damit das Ergebnis
+// unabhängig von der Anzeigegröße korrekt zugeschnitten wird.
+function CropStep({
+  image,
+  onConfirm,
+  onSkip,
+  onBack
+}) {
+  const imgRef = React.useRef(null);
+  const stageRef = React.useRef(null);
+  const dragRef = React.useRef(null);
+  const [imgSize, setImgSize] = React.useState({
+    w: 0,
+    h: 0
+  });
+  const [rect, setRect] = React.useState({
+    x: 0.04,
+    y: 0.02,
+    w: 0.92,
+    h: 0.96
+  });
+  const MIN_SIZE = 0.08;
+  const relPos = (clientX, clientY) => {
+    const el = stageRef.current;
+    if (!el) return {
+      x: 0,
+      y: 0
+    };
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.min(1, Math.max(0, (clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (clientY - r.top) / r.height))
+    };
+  };
+  const onMove = e => {
+    const d = dragRef.current;
+    if (!d) return;
+    const pos = relPos(e.clientX, e.clientY);
+    const dx = pos.x - d.start.x;
+    const dy = pos.y - d.start.y;
+    let {
+      x,
+      y,
+      w,
+      h
+    } = d.rect;
+    if (d.mode === "move") {
+      x = Math.min(1 - w, Math.max(0, d.rect.x + dx));
+      y = Math.min(1 - h, Math.max(0, d.rect.y + dy));
+    } else {
+      let x1 = d.rect.x,
+        y1 = d.rect.y;
+      let x2 = d.rect.x + d.rect.w,
+        y2 = d.rect.y + d.rect.h;
+      if (d.mode.includes("l")) x1 = Math.min(x2 - MIN_SIZE, Math.max(0, x1 + dx));
+      if (d.mode.includes("r")) x2 = Math.max(x1 + MIN_SIZE, Math.min(1, x2 + dx));
+      if (d.mode.includes("t")) y1 = Math.min(y2 - MIN_SIZE, Math.max(0, y1 + dy));
+      if (d.mode.includes("b")) y2 = Math.max(y1 + MIN_SIZE, Math.min(1, y2 + dy));
+      x = x1;
+      y = y1;
+      w = x2 - x1;
+      h = y2 - y1;
+    }
+    setRect({
+      x,
+      y,
+      w,
+      h
+    });
+  };
+  const onUp = () => {
+    dragRef.current = null;
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+  };
+  const startDrag = mode => e => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = {
+      mode,
+      start: relPos(e.clientX, e.clientY),
+      rect: {
+        ...rect
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+  const handleConfirm = () => {
+    const img = imgRef.current;
+    if (!img || !imgSize.w || !imgSize.h) {
+      onSkip();
+      return;
+    }
+    const sx = Math.round(rect.x * imgSize.w);
+    const sy = Math.round(rect.y * imgSize.h);
+    const sw = Math.round(rect.w * imgSize.w);
+    const sh = Math.round(rect.h * imgSize.h);
+    const canvas = document.createElement("canvas");
+    canvas.width = sw;
+    canvas.height = sh;
+    canvas.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
+    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    onConfirm({
+      dataUrl,
+      base64,
+      mediaType: "image/jpeg"
+    });
+  };
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    className: "scanner-back",
+    onClick: onBack
+  }, /*#__PURE__*/React.createElement(Icon.Back, null), " ", /*#__PURE__*/React.createElement("span", null, "zur\xFCck")), /*#__PURE__*/React.createElement("div", {
+    className: "crop-stage",
+    ref: stageRef
+  }, /*#__PURE__*/React.createElement("img", {
+    ref: imgRef,
+    src: image,
+    alt: "Beleg",
+    draggable: false,
+    onLoad: e => setImgSize({
+      w: e.target.naturalWidth,
+      h: e.target.naturalHeight
+    })
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "crop-rect",
+    style: {
+      left: `${rect.x * 100}%`,
+      top: `${rect.y * 100}%`,
+      width: `${rect.w * 100}%`,
+      height: `${rect.h * 100}%`
+    },
+    onPointerDown: startDrag("move")
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "crop-handle tl",
+    onPointerDown: startDrag("tl")
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "crop-handle tr",
+    onPointerDown: startDrag("tr")
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "crop-handle bl",
+    onPointerDown: startDrag("bl")
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "crop-handle br",
+    onPointerDown: startDrag("br")
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "crop-hint"
+  }, "Ziehe die Ecken, um nur den Bon ohne Hintergrund auszuw\xE4hlen."), /*#__PURE__*/React.createElement("div", {
+    className: "preview-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "receipt-btn secondary",
+    onClick: onSkip
+  }, "Ganzes Bild verwenden"), /*#__PURE__*/React.createElement("button", {
+    className: "scanner-analyze",
+    onClick: handleConfirm
+  }, /*#__PURE__*/React.createElement("span", null, "Zuschneiden"))));
+}
+
 // ====================== Beleg-Karte (Ergebnis) ======================
 function ReceiptCard({
   data,
@@ -942,15 +1129,53 @@ function ReceiptCard({
     className: "receipt-field"
   }, /*#__PURE__*/React.createElement("div", {
     className: "receipt-field-label"
-  }, "MwSt. 19%"), /*#__PURE__*/React.createElement("div", {
-    className: `receipt-field-value ${Number(data.mwst_19) > 0 ? "" : "empty"}`
-  }, Number(data.mwst_19) > 0 ? fmtEUR(data.mwst_19) : "—")), /*#__PURE__*/React.createElement("div", {
+  }, "MwSt. 19%"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    min: "0",
+    value: data.mwst_19 != null && data.mwst_19 !== 0 ? data.mwst_19 : "",
+    placeholder: "\u2014",
+    onChange: e => {
+      const v = e.target.value;
+      update({
+        mwst_19: v === "" ? 0 : parseFloat(v)
+      });
+    },
+    className: `receipt-field-value ${Number(data.mwst_19) > 0 ? "" : "empty"}`,
+    style: {
+      border: "none",
+      background: "transparent",
+      outline: "none",
+      fontFamily: "var(--font-num)",
+      padding: 0,
+      width: "100%"
+    }
+  })), /*#__PURE__*/React.createElement("div", {
     className: "receipt-field"
   }, /*#__PURE__*/React.createElement("div", {
     className: "receipt-field-label"
-  }, "MwSt. 7%"), /*#__PURE__*/React.createElement("div", {
-    className: `receipt-field-value ${Number(data.mwst_7) > 0 ? "" : "empty"}`
-  }, Number(data.mwst_7) > 0 ? fmtEUR(data.mwst_7) : "—")), /*#__PURE__*/React.createElement("div", {
+  }, "MwSt. 7%"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    min: "0",
+    value: data.mwst_7 != null && data.mwst_7 !== 0 ? data.mwst_7 : "",
+    placeholder: "\u2014",
+    onChange: e => {
+      const v = e.target.value;
+      update({
+        mwst_7: v === "" ? 0 : parseFloat(v)
+      });
+    },
+    className: `receipt-field-value ${Number(data.mwst_7) > 0 ? "" : "empty"}`,
+    style: {
+      border: "none",
+      background: "transparent",
+      outline: "none",
+      fontFamily: "var(--font-num)",
+      padding: 0,
+      width: "100%"
+    }
+  })), /*#__PURE__*/React.createElement("div", {
     className: "receipt-field mono",
     style: {
       gridColumn: "1 / -1"
@@ -959,9 +1184,25 @@ function ReceiptCard({
     className: "receipt-field-label"
   }, /*#__PURE__*/React.createElement(ConfDot, {
     level: conf.rechnungsnummer
-  }), "Rechnungsnummer"), /*#__PURE__*/React.createElement("div", {
-    className: `receipt-field-value ${data.rechnungsnummer ? "" : "empty"}`
-  }, data.rechnungsnummer || "—"))), /*#__PURE__*/React.createElement("div", {
+  }), "Rechnungsnummer"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: data.rechnungsnummer || "",
+    placeholder: "Nicht erkannt",
+    onChange: e => update({
+      rechnungsnummer: e.target.value || null
+    }),
+    className: `receipt-field-value ${data.rechnungsnummer ? "" : "empty"}`,
+    style: {
+      border: "none",
+      background: "transparent",
+      outline: "none",
+      fontFamily: "var(--font-num)",
+      padding: 0,
+      width: "100%"
+    }
+  }))), data._rawText && /*#__PURE__*/React.createElement("details", {
+    className: "receipt-rawtext"
+  }, /*#__PURE__*/React.createElement("summary", null, "Erkannter Rohtext (OCR)"), /*#__PURE__*/React.createElement("pre", null, data._rawText)), /*#__PURE__*/React.createElement("div", {
     className: "receipt-category"
   }, /*#__PURE__*/React.createElement("div", {
     className: "receipt-category-label"
@@ -1041,7 +1282,7 @@ function ReceiptScanner({
   onAccept,
   receipts = []
 }) {
-  // step: "choose" | "camera" | "upload" | "preview" | "result"
+  // step: "choose" | "camera" | "upload" | "crop" | "preview" | "result"
   const [step, setStep] = React.useState("choose");
   const [image, setImage] = React.useState(null); // { dataUrl, base64, mediaType }
   const [fileName, setFileName] = React.useState(null);
@@ -1108,7 +1349,7 @@ function ReceiptScanner({
       setFileName(f.name);
       const data = isPdf ? await readPdf(f) : await compressImage(f);
       setImage(data);
-      setStep("preview");
+      setStep(isPdf ? "preview" : "crop");
     } catch (e) {
       setError("Datei konnte nicht gelesen werden.");
     }
@@ -1194,12 +1435,15 @@ function ReceiptScanner({
     } else if (step === "result") {
       setResult(null);
       setStep("preview");
+    } else if (step === "crop") {
+      setImage(null);
+      setStep("choose");
     } else {
       setStep("choose");
     }
   };
   const isPdfPreview = image?.mediaType === "application/pdf";
-  const headerTitle = step === "result" ? "Beleg prüfen" : step === "preview" ? "Vorschau" : step === "camera" ? "Beleg scannen" : step === "upload" ? "Datei hochladen" : "Beleg erfassen";
+  const headerTitle = step === "result" ? "Beleg prüfen" : step === "preview" ? "Vorschau" : step === "crop" ? "Zuschneiden" : step === "camera" ? "Beleg scannen" : step === "upload" ? "Datei hochladen" : "Beleg erfassen";
   return /*#__PURE__*/React.createElement("div", {
     className: "scanner-backdrop",
     onClick: onClose
@@ -1230,7 +1474,7 @@ function ReceiptScanner({
     onCapture: data => {
       setImage(data);
       setFileName(null);
-      setStep("preview");
+      setStep("crop");
     },
     onCancel: () => setStep("choose"),
     onError: msg => {
@@ -1241,6 +1485,14 @@ function ReceiptScanner({
     onFile: handleFile,
     onBack: () => setStep("choose"),
     error: error
+  }), step === "crop" && image && /*#__PURE__*/React.createElement(CropStep, {
+    image: image.dataUrl,
+    onConfirm: cropped => {
+      setImage(cropped);
+      setStep("preview");
+    },
+    onSkip: () => setStep("preview"),
+    onBack: goBack
   }), step === "preview" && image && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     className: "scanner-back",
     onClick: goBack

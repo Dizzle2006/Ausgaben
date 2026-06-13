@@ -2183,6 +2183,7 @@ input { font-family: inherit; }
 .scanner-modal {
   width: min(480px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 22px;
@@ -2199,6 +2200,7 @@ input { font-family: inherit; }
   justify-content: space-between;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .scanner-header h2 {
   font-size: 17px;
@@ -2209,6 +2211,9 @@ input { font-family: inherit; }
 .scanner-body {
   padding: 18px 20px 20px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -2470,6 +2475,37 @@ input { font-family: inherit; }
   box-shadow: var(--shadow-sm);
 }
 
+/* Rohtext (OCR) */
+.receipt-rawtext {
+  margin: 0 18px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.receipt-rawtext summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  list-style: none;
+}
+.receipt-rawtext summary::-webkit-details-marker { display: none; }
+.receipt-rawtext summary::before { content: "▸ "; }
+.receipt-rawtext[open] summary::before { content: "▾ "; }
+.receipt-rawtext pre {
+  margin: 0;
+  padding: 0 12px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--text-faint);
+  max-height: 200px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Footer actions */
 .receipt-actions {
   display: grid;
@@ -2692,6 +2728,47 @@ input { font-family: inherit; }
   margin-top: 4px;
 }
 
+/* ============== Zuschneiden ============== */
+.crop-stage {
+  position: relative;
+  width: 100%;
+  line-height: 0;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000;
+}
+.crop-stage img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.crop-rect {
+  position: absolute;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+  cursor: move;
+  touch-action: none;
+}
+.crop-handle {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  touch-action: none;
+}
+.crop-handle.tl { top: -13px; left: -13px; cursor: nwse-resize; }
+.crop-handle.tr { top: -13px; right: -13px; cursor: nesw-resize; }
+.crop-handle.bl { bottom: -13px; left: -13px; cursor: nesw-resize; }
+.crop-handle.br { bottom: -13px; right: -13px; cursor: nwse-resize; }
+.crop-hint {
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+  margin-top: -2px;
+}
+
 /* ============== Beleg-Karte: Bild oben ============== */
 .receipt-card-image {
   background: #000;
@@ -2776,6 +2853,43 @@ input { font-family: inherit; }
 .receipts-empty .sub {
   font-size: 12px;
   color: var(--text-faint);
+}
+
+.receipt-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.receipt-group-header:first-child { padding-top: 4px; }
+.receipt-group-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.receipt-group-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.receipt-group-count {
+  font-family: var(--font-num);
+  font-weight: 700;
+  color: var(--text-faint);
+  font-size: 11px;
 }
 
 .receipt-row {

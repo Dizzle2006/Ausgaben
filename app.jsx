@@ -1137,6 +1137,18 @@ function ReceiptsSection({ receipts, total, categories, onOpen, onDelete }) {
     [receipts]
   );
 
+  // Nach Steuerkategorie gruppieren (Reihenfolge wie STEUER_KATEGORIEN, "Privat" zuletzt)
+  const grouped = useMemo(() => {
+    const byKat = {};
+    sorted.forEach((r) => {
+      const katId = STEUER_KATEGORIEN.some((k) => k.id === r.steuerkat) ? r.steuerkat : "privat";
+      (byKat[katId] = byKat[katId] || []).push(r);
+    });
+    return STEUER_KATEGORIEN.
+    map((kat) => ({ kat, items: byKat[kat.id] || [] })).
+    filter((g) => g.items.length > 0);
+  }, [sorted]);
+
   return (
     <div className="section">
       <div className="section-header">
@@ -1196,16 +1208,30 @@ function ReceiptsSection({ receipts, total, categories, onOpen, onDelete }) {
             <div className="sub">Mit dem Kamera-Button unten rechts hinzufügen.</div>
           </div> :
 
-        sorted.map((r) =>
-        <ReceiptRow
-          key={r.id}
-          receipt={r}
-          categoryLabel={catById[r.categoryId] || "—"}
-          onOpen={() => onOpen(r)}
-          onDelete={() => {
-            if (confirm(`Beleg „${r.haendler || "Unbekannt"}“ wirklich löschen?`)) onDelete(r.id);
-          }} />
+        grouped.map(({ kat, items }) =>
+        <React.Fragment key={kat.id}>
+            <div className="receipt-group-header">
+              <span
+              className="receipt-group-badge"
+              style={{ background: kat.bg, color: kat.farbe }}>
 
+                {kat.kurz}
+              </span>
+              <span className="receipt-group-title">{kat.label}</span>
+              <span className="receipt-group-count">{items.length}</span>
+            </div>
+            {items.map((r) =>
+          <ReceiptRow
+            key={r.id}
+            receipt={r}
+            categoryLabel={catById[r.categoryId] || "—"}
+            onOpen={() => onOpen(r)}
+            onDelete={() => {
+              if (confirm(`Beleg „${r.haendler || "Unbekannt"}“ wirklich löschen?`)) onDelete(r.id);
+            }} />
+
+          )}
+          </React.Fragment>
         )
         }
       </div>
