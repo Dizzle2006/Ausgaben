@@ -1,6 +1,6 @@
 // Service Worker für Ausgaben Trocken
 // Bump CACHE_VERSION when you ship changes so clients refetch.
-const CACHE_VERSION = "ausgaben-trocken-v28";
+const CACHE_VERSION = "ausgaben-trocken-v29";
 
 // Only files that actually exist on the server
 const CORE_ASSETS = [

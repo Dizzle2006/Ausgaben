@@ -106,6 +106,38 @@ else
   echo "  ⚠️  CDN-Fallback aktiv (React lokal nicht verfügbar)"
 fi
 
+# ── Tesseract.js (lokale OCR) lokal hosten ────────────────────────────
+# Wie React: Worker-Skript, WASM-Kern (LSTM-only/best_int — kleinste Variante,
+# passend zu OEM.LSTM_ONLY in scanner.jsx) und das deutsche Sprachpaket werden
+# einmalig heruntergeladen und same-origin ausgeliefert. Vermeidet Laufzeit-
+# Abhängigkeit von cdn.jsdelivr.net (CORS/CSP-Probleme bei Cross-Origin-
+# Workern, v.a. iOS Safari, führten zu endlosem "OCR wird initialisiert…").
+TESS_VERSION="5.1.1"
+TESS_DIR="$DIST/libs/tesseract"
+mkdir -p "$TESS_DIR/lang"
+TESS_OK=true
+
+fetch_tess() {
+  if ! curl -sL --max-time 120 "$1" -o "$2" 2>/dev/null; then
+    TESS_OK=false
+  fi
+}
+
+fetch_tess "https://cdn.jsdelivr.net/npm/tesseract.js@${TESS_VERSION}/dist/tesseract.min.js" "$TESS_DIR/tesseract.min.js"
+fetch_tess "https://cdn.jsdelivr.net/npm/tesseract.js@${TESS_VERSION}/dist/worker.min.js" "$TESS_DIR/worker.min.js"
+fetch_tess "https://cdn.jsdelivr.net/npm/tesseract.js-core@${TESS_VERSION}/tesseract-core-simd-lstm.wasm.js" "$TESS_DIR/tesseract-core-simd-lstm.wasm.js"
+fetch_tess "https://cdn.jsdelivr.net/npm/tesseract.js-core@${TESS_VERSION}/tesseract-core-lstm.wasm.js" "$TESS_DIR/tesseract-core-lstm.wasm.js"
+fetch_tess "https://cdn.jsdelivr.net/npm/@tesseract.js-data/deu@1.0.0/4.0.0_best_int/deu.traineddata.gz" "$TESS_DIR/lang/deu.traineddata.gz"
+fetch_tess "https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int/eng.traineddata.gz" "$TESS_DIR/lang/eng.traineddata.gz"
+
+if [ "$TESS_OK" = true ]; then
+  CSP_OCR_SRC=""
+  echo "  ✓ Tesseract.js (OCR) lokal gebündelt — cdn.jsdelivr.net aus CSP entfernt"
+else
+  CSP_OCR_SRC=" https://cdn.jsdelivr.net"
+  echo "  ⚠️  Tesseract.js-Download unvollständig (kein Internet?) — jsdelivr-Fallback in CSP"
+fi
+
 # ── index.html ohne Babel, ohne unsafe-eval ───────────────────────────
 # index.html mit dynamischer CSP + React-Pfaden generieren
 cat > "$DIST/index.html" << HTMLEOF
@@ -113,9 +145,10 @@ cat > "$DIST/index.html" << HTMLEOF
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <!-- CSP: unsafe-eval + unsafe-inline(scripts) entfernt; React lokal wenn verfügbar.
-       jsdelivr.net + blob: sind für den lazy geladenen Tesseract-OCR-Worker nötig. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${CSP_SCRIPT_SRC} https://cdn.jsdelivr.net; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com https://cdn.jsdelivr.net http://localhost:11434 blob:; worker-src 'self' blob:; manifest-src 'self'; frame-src 'none'; form-action 'self'; object-src 'none'; base-uri 'self';">
+  <!-- CSP: unsafe-eval + unsafe-inline(scripts) entfernt; React + Tesseract-OCR
+       lokal gebündelt (siehe build.sh). jsdelivr.net nur als Fallback, falls
+       der Build ohne Internetverbindung lief. blob: für den OCR-Worker. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${CSP_SCRIPT_SRC}${CSP_OCR_SRC}; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com${CSP_OCR_SRC} http://localhost:11434 blob:; worker-src 'self' blob:; manifest-src 'self'; frame-src 'none'; form-action 'self'; object-src 'none'; base-uri 'self';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Ausgaben Trocken</title>
   <meta name="description" content="Persönliches Budget & Investment-Tracker" />

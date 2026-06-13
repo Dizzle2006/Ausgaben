@@ -15,6 +15,13 @@
 // dank cacheMethod "readWrite" im IndexedDB-Cache — danach läuft alles offline.
 
 // ====================== Tesseract Singleton + lazy loader ==================
+// Tesseract.js (Worker-Skript, WASM-Kern, Sprachpakete) wird per build.sh
+// lokal nach libs/tesseract/ heruntergeladen und same-origin ausgeliefert
+// (genau wie React) — kein Laufzeit-Zugriff auf cdn.jsdelivr.net mehr nötig.
+// Das vermeidet CORS/CSP-Eigenheiten bei Cross-Origin Workern (v.a. iOS
+// Safari), die zuvor zu einem endlosen "OCR wird initialisiert…" führen
+// konnten, sowie Hänger bei langsamen/blockierten CDN-Verbindungen.
+const TESS_BASE = new URL("libs/tesseract/", document.baseURI).href;
 let _tesseractWorker = null;
 let _tesseractReady = false;
 let _tesseractLoading = false;
@@ -67,9 +74,9 @@ async function _ensureTesseract(onProgress) {
     if (typeof Tesseract === "undefined") {
       await new Promise((resolve, reject) => {
         const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+        s.src = TESS_BASE + "tesseract.min.js";
         const timer = setTimeout(() => {
-          reject(new Error("Tesseract.js konnte nicht geladen werden (Zeitüberschreitung).\n" + "Bitte Internetverbindung prüfen und erneut versuchen."));
+          reject(new Error("Tesseract.js konnte nicht geladen werden (Zeitüberschreitung).\n" + "Bitte die App neu laden und erneut versuchen."));
         }, 20000);
         s.onload = () => {
           clearTimeout(timer);
@@ -77,7 +84,7 @@ async function _ensureTesseract(onProgress) {
         };
         s.onerror = () => {
           clearTimeout(timer);
-          reject(new Error("Tesseract.js konnte nicht geladen werden.\n" + "Einmalig ist eine Internetverbindung nötig, um das Sprachpaket herunterzuladen."));
+          reject(new Error("Tesseract.js konnte nicht geladen werden.\n" + "Bitte die App neu laden und erneut versuchen."));
         };
         document.head.appendChild(s);
       });
@@ -88,6 +95,9 @@ async function _ensureTesseract(onProgress) {
     // ohne dass der Logger je ein Fortschritts-Event meldet, nach 2 Minuten
     // mit klarer Fehlermeldung abbrechen statt endlos zu warten.
     const createWorker = Tesseract.createWorker(lang, 1, {
+      workerPath: TESS_BASE + "worker.min.js",
+      corePath: TESS_BASE,
+      langPath: TESS_BASE + "lang",
       logger: m => {
         if (m.status === "recognizing text") {
           broadcast(`Texterkennung… ${Math.round((m.progress || 0) * 100)}%`);
