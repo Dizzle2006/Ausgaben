@@ -229,6 +229,8 @@ function VoiceEntryModal({ open, onClose, categories, onSave }) {
   const [newCategoryLabel, setNewCategoryLabel] = React.useState("");
   const [error, setError] = React.useState(null);
   const recognitionRef = React.useRef(null);
+  const liveTextRef = React.useRef("");
+  const timeoutRef = React.useRef(null);
 
   const SpeechRecognitionImpl = typeof window !== "undefined"
     ? (window.SpeechRecognition || window.webkitSpeechRecognition)
@@ -248,6 +250,11 @@ function VoiceEntryModal({ open, onClose, categories, onSave }) {
     }
     return () => {
       try { recognitionRef.current?.stop(); } catch {}
+      recognitionRef.current = null;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
     };
   }, [open]);
 
@@ -275,38 +282,72 @@ function VoiceEntryModal({ open, onClose, categories, onSave }) {
     setHasResult(true);
   };
 
+  // Beendet die Aufnahme einmalig: wertet den bis dahin erkannten Text aus
+  // (oder zeigt eine Fehlermeldung, falls nichts erkannt wurde). Wird sowohl
+  // von "onend" als auch von einem manuellen Stop/Timeout aufgerufen — der
+  // recognitionRef-Reset verhindert doppelte Auswertung.
+  const finalizeListening = () => {
+    if (!recognitionRef.current) return;
+    recognitionRef.current = null;
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    setListening(false);
+    const text = liveTextRef.current.trim();
+    liveTextRef.current = "";
+    if (text) {
+      applyTranscript(text);
+    } else {
+      setError((prev) => prev || "Keine Eingabe erkannt. Bitte erneut versuchen oder Text eingeben.");
+    }
+  };
+
   const startListening = () => {
     if (!SpeechRecognitionImpl) return;
     setError(null);
+    setTranscript("");
+    liveTextRef.current = "";
     const recognition = new SpeechRecognitionImpl();
     recognition.lang = "de-DE";
-    recognition.interimResults = false;
+    recognition.interimResults = true;
+    recognition.continuous = true;
     recognition.maxAlternatives = 1;
     recognition.onresult = (e) => {
-      const text = e.results?.[0]?.[0]?.transcript || "";
-      if (text) applyTranscript(text);
+      let text = "";
+      for (let i = 0; i < e.results.length; i++) {
+        text += e.results[i][0].transcript;
+      }
+      liveTextRef.current = text;
+      setTranscript(text);
     };
     recognition.onerror = (e) => {
+      if (e.error === "no-speech") return;
       setError(
         e.error === "not-allowed" || e.error === "service-not-allowed"
           ? "Mikrofon-Zugriff wurde nicht erlaubt."
-          : "Spracherkennung fehlgeschlagen. Bitte erneut versuchen."
+          : "Spracherkennung fehlgeschlagen. Bitte erneut versuchen oder Text eingeben."
       );
-      setListening(false);
     };
-    recognition.onend = () => setListening(false);
+    recognition.onend = finalizeListening;
     recognitionRef.current = recognition;
     try {
       recognition.start();
       setListening(true);
+      // Sicherheits-Timeout: falls "onend" nie kommt, nach 15s automatisch beenden
+      timeoutRef.current = setTimeout(() => {
+        try { recognitionRef.current?.stop(); } catch {}
+        finalizeListening();
+      }, 15000);
     } catch {
+      recognitionRef.current = null;
       setError("Spracherkennung konnte nicht gestartet werden.");
     }
   };
 
   const stopListening = () => {
     try { recognitionRef.current?.stop(); } catch {}
-    setListening(false);
+    finalizeListening();
   };
 
   const handleCatChange = (val) => {
@@ -359,16 +400,22 @@ function VoiceEntryModal({ open, onClose, categories, onSave }) {
                   className={`voice-mic-btn${listening ? " listening" : ""}`}
                   onClick={listening ? stopListening : startListening}
                   disabled={!SpeechRecognitionImpl}
-                  aria-label={listening ? "Aufnahme stoppen" : "Aufnahme starten"}
+                  aria-label={listening ? "Aufnahme beenden" : "Aufnahme starten"}
                 >
-                  <Icon.Mic />
+                  {listening ? <Icon.Close /> : <Icon.Mic />}
                 </button>
                 <div className="voice-mic-hint">
                   {listening
-                    ? "Ich höre zu …"
+                    ? "Ich höre zu … Zum Beenden hier tippen."
                     : <>Antippen und sprechen, z.&nbsp;B. „Edeka 12,99 heute“</>}
                 </div>
               </div>
+
+              {listening && (
+                <button type="button" className="receipt-btn secondary" onClick={stopListening}>
+                  Aufnahme beenden
+                </button>
+              )}
 
               {error && <div className="voice-error">{error}</div>}
 

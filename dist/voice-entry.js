@@ -212,6 +212,8 @@ function VoiceEntryModal({
   const [newCategoryLabel, setNewCategoryLabel] = React.useState("");
   const [error, setError] = React.useState(null);
   const recognitionRef = React.useRef(null);
+  const liveTextRef = React.useRef("");
+  const timeoutRef = React.useRef(null);
   const SpeechRecognitionImpl = typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
   React.useEffect(() => {
     if (open) {
@@ -229,6 +231,11 @@ function VoiceEntryModal({
       try {
         recognitionRef.current?.stop();
       } catch {}
+      recognitionRef.current = null;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
     };
   }, [open]);
   React.useEffect(() => {
@@ -254,27 +261,63 @@ function VoiceEntryModal({
     setCategoryLabel(categories.some(c => c.label === guess) ? guess : "");
     setHasResult(true);
   };
+
+  // Beendet die Aufnahme einmalig: wertet den bis dahin erkannten Text aus
+  // (oder zeigt eine Fehlermeldung, falls nichts erkannt wurde). Wird sowohl
+  // von "onend" als auch von einem manuellen Stop/Timeout aufgerufen — der
+  // recognitionRef-Reset verhindert doppelte Auswertung.
+  const finalizeListening = () => {
+    if (!recognitionRef.current) return;
+    recognitionRef.current = null;
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    setListening(false);
+    const text = liveTextRef.current.trim();
+    liveTextRef.current = "";
+    if (text) {
+      applyTranscript(text);
+    } else {
+      setError(prev => prev || "Keine Eingabe erkannt. Bitte erneut versuchen oder Text eingeben.");
+    }
+  };
   const startListening = () => {
     if (!SpeechRecognitionImpl) return;
     setError(null);
+    setTranscript("");
+    liveTextRef.current = "";
     const recognition = new SpeechRecognitionImpl();
     recognition.lang = "de-DE";
-    recognition.interimResults = false;
+    recognition.interimResults = true;
+    recognition.continuous = true;
     recognition.maxAlternatives = 1;
     recognition.onresult = e => {
-      const text = e.results?.[0]?.[0]?.transcript || "";
-      if (text) applyTranscript(text);
+      let text = "";
+      for (let i = 0; i < e.results.length; i++) {
+        text += e.results[i][0].transcript;
+      }
+      liveTextRef.current = text;
+      setTranscript(text);
     };
     recognition.onerror = e => {
-      setError(e.error === "not-allowed" || e.error === "service-not-allowed" ? "Mikrofon-Zugriff wurde nicht erlaubt." : "Spracherkennung fehlgeschlagen. Bitte erneut versuchen.");
-      setListening(false);
+      if (e.error === "no-speech") return;
+      setError(e.error === "not-allowed" || e.error === "service-not-allowed" ? "Mikrofon-Zugriff wurde nicht erlaubt." : "Spracherkennung fehlgeschlagen. Bitte erneut versuchen oder Text eingeben.");
     };
-    recognition.onend = () => setListening(false);
+    recognition.onend = finalizeListening;
     recognitionRef.current = recognition;
     try {
       recognition.start();
       setListening(true);
+      // Sicherheits-Timeout: falls "onend" nie kommt, nach 15s automatisch beenden
+      timeoutRef.current = setTimeout(() => {
+        try {
+          recognitionRef.current?.stop();
+        } catch {}
+        finalizeListening();
+      }, 15000);
     } catch {
+      recognitionRef.current = null;
       setError("Spracherkennung konnte nicht gestartet werden.");
     }
   };
@@ -282,7 +325,7 @@ function VoiceEntryModal({
     try {
       recognitionRef.current?.stop();
     } catch {}
-    setListening(false);
+    finalizeListening();
   };
   const handleCatChange = val => {
     if (val === NEW_CAT) {
@@ -332,10 +375,14 @@ function VoiceEntryModal({
     className: `voice-mic-btn${listening ? " listening" : ""}`,
     onClick: listening ? stopListening : startListening,
     disabled: !SpeechRecognitionImpl,
-    "aria-label": listening ? "Aufnahme stoppen" : "Aufnahme starten"
-  }, /*#__PURE__*/React.createElement(Icon.Mic, null)), /*#__PURE__*/React.createElement("div", {
+    "aria-label": listening ? "Aufnahme beenden" : "Aufnahme starten"
+  }, listening ? /*#__PURE__*/React.createElement(Icon.Close, null) : /*#__PURE__*/React.createElement(Icon.Mic, null)), /*#__PURE__*/React.createElement("div", {
     className: "voice-mic-hint"
-  }, listening ? "Ich höre zu …" : /*#__PURE__*/React.createElement(React.Fragment, null, "Antippen und sprechen, z.\xA0B. \u201EEdeka 12,99 heute\u201C"))), error && /*#__PURE__*/React.createElement("div", {
+  }, listening ? "Ich höre zu … Zum Beenden hier tippen." : /*#__PURE__*/React.createElement(React.Fragment, null, "Antippen und sprechen, z.\xA0B. \u201EEdeka 12,99 heute\u201C"))), listening && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "receipt-btn secondary",
+    onClick: stopListening
+  }, "Aufnahme beenden"), error && /*#__PURE__*/React.createElement("div", {
     className: "voice-error"
   }, error), /*#__PURE__*/React.createElement("textarea", {
     className: "voice-manual-input",

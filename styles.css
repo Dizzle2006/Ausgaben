@@ -5872,9 +5872,10 @@ body { font-size: var(--font-size-base); }
    ════════════════════════════════════════════════════════════════════════ */
 .voice-fab {
   position: fixed;
-  left: 20px;
-  right: auto;
-  bottom: calc(var(--tab-bar-h) + 18px + env(safe-area-inset-bottom, 0px));
+  right: 20px;
+  left: auto;
+  /* Über dem Chatbot-FAB stapeln: Scanner (0) + Chatbot (56px + 12px) + Diktier (56px + 12px) */
+  bottom: calc(var(--tab-bar-h) + 18px + 56px + 12px + 56px + 12px + env(safe-area-inset-bottom, 0px));
   width: 56px; height: 56px;
   border-radius: 50%;
   border: 1.5px solid var(--border-strong, var(--border));
@@ -5897,8 +5898,9 @@ body { font-size: var(--font-size-base); }
 
 @media (min-width: 760px) {
   .voice-fab {
-    left: 24px;
-    bottom: calc(var(--tab-bar-h) + 38px);
+    right: 24px;
+    left: auto;
+    bottom: calc(var(--tab-bar-h) + 38px + 56px + 12px + 56px + 12px);
   }
 }
 

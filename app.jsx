@@ -3576,7 +3576,7 @@ function App() {
 
       }
 
-      {/* Diktier-FAB — nur im Budget-Tab, linke Seite */}
+      {/* Diktier-FAB — nur im Budget-Tab, rechte Seite, über dem BudgetBot-FAB gestapelt */}
       {state.view === "budget" && typeof VoiceEntryModal !== "undefined" &&
       <button
         className="voice-fab"
