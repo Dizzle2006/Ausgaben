@@ -77,6 +77,7 @@ async function _ensureTesseract(onProgress) {
   // importScripts ohne Zwischenmeldungen läuft). So sieht man im UI, dass im
   // Hintergrund noch etwas passiert, statt dass die Anzeige stehen bleibt.
   const heartbeat = setInterval(() => emit(`${basePhase} (${elapsed()}s)`), 1000);
+  let errorPoll;
 
   try {
     // Script-Tag lazy ins DOM – nur einmal. FIX: Diese Ladephase lag bisher
@@ -108,9 +109,17 @@ async function _ensureTesseract(onProgress) {
 
     broadcast("Sprachpaket wird geladen…");
 
-    // Sicherheits-Timeout: falls Core/Sprachpaket-Download hängen bleibt,
-    // ohne dass der Logger je ein Fortschritts-Event meldet, nach 2 Minuten
-    // mit klarer Fehlermeldung abbrechen statt endlos zu warten.
+    // FIX: Wenn in tesseract.js v5 das Laden des Sprachpakets ("loadLanguage")
+    // oder die Initialisierung fehlschlägt (z.B. Netzwerkfehler beim Abruf
+    // von deu.traineddata.gz, fehlerhafte Gzip-Daten, …), wird das von
+    // createWorker() zurückgegebene Promise NIE aufgelöst oder abgelehnt —
+    // es hängt für immer (workerResReject wird nur bei Fehlern in der
+    // allerersten "load"-Phase aufgerufen). Ohne errorHandler würde der
+    // Fehler intern nur in die Konsole geworfen und wir würden 2 Minuten
+    // auf den Sicherheits-Timeout warten, bevor wir (mit einer generischen,
+    // wenig hilfreichen Meldung) abbrechen. Mit errorHandler bekommen wir
+    // den konkreten Fehlertext sofort und können direkt damit abbrechen.
+    let workerError = null;
     const createWorker = Tesseract.createWorker(lang, 1, {
       workerPath: TESS_BASE + "worker.min.js",
       corePath:   TESS_BASE,
@@ -128,6 +137,7 @@ async function _ensureTesseract(onProgress) {
           broadcast("Letzte Vorbereitungen…");
         }
       },
+      errorHandler: (err) => { workerError = err; },
       cacheMethod: "readWrite",
     });
     let timedOut = false;
@@ -138,6 +148,15 @@ async function _ensureTesseract(onProgress) {
 
     const worker = await Promise.race([
       createWorker,
+      // Pollt auf den (sonst stillen) errorHandler-Fehler oben — bricht
+      // sofort mit der konkreten Ursache ab, statt 2 Minuten zu warten.
+      new Promise((_, reject) => {
+        errorPoll = setInterval(() => {
+          if (workerError) {
+            reject(new Error(`OCR-Initialisierung fehlgeschlagen: ${workerError}`));
+          }
+        }, 250);
+      }),
       new Promise((_, reject) => setTimeout(() => {
         timedOut = true;
         reject(new Error(
@@ -158,17 +177,22 @@ async function _ensureTesseract(onProgress) {
     return worker;
   } catch (e) {
     _tesseractLoading = false;
-    const err = (e instanceof Error && /Tesseract\.js konnte nicht/.test(e.message))
-      ? e
-      : new Error(
-          "OCR konnte nicht initialisiert werden.\n" +
-          "Einmalig ist eine Internetverbindung nötig, um das Sprachpaket herunterzuladen."
-        );
+    // FIX: Die konkrete Fehlermeldung (z.B. "Network error while fetching
+    // …deu.traineddata.gz. Response code: 404" oder die 2-Minuten-
+    // Zeitüberschreitung) wurde bisher durch eine generische "Einmalig ist
+    // eine Internetverbindung nötig"-Meldung ersetzt — selbst wenn eine
+    // Internetverbindung bestand. Jetzt wird die tatsächliche Ursache immer
+    // angezeigt, damit erkennbar ist, woran es wirklich liegt.
+    const detail = e instanceof Error ? e.message : String(e);
+    const err = /^(Tesseract\.js konnte nicht|OCR-Initialisierung)/.test(detail)
+      ? (e instanceof Error ? e : new Error(detail))
+      : new Error(`OCR konnte nicht initialisiert werden:\n${detail}`);
     _pendingResolvers.forEach((p) => p.reject(err));
     _pendingResolvers = [];
     throw err;
   } finally {
     clearInterval(heartbeat);
+    clearInterval(errorPoll);
   }
 }
 
