@@ -2736,7 +2736,10 @@ input { font-family: inherit; }
   border-radius: var(--radius);
   overflow: hidden;
   background: #000;
-  touch-action: none;
+  /* Vertikales Scrollen erlauben, wenn das Bild höher als der Bildschirm ist —
+     nur die Eckpunkte (eigenes touch-action: none) blockieren das Scrollen
+     zum Ziehen. */
+  touch-action: pan-y;
 }
 .crop-stage img {
   display: block;
