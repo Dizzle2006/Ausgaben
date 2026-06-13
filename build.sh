@@ -96,13 +96,17 @@ fi
 if [ "$REACT_OK" = true ] && [ "$REACTDOM_OK" = true ]; then
   REACT_SCRIPT='<script src="libs/react.production.min.js"></script>'
   REACTDOM_SCRIPT='<script src="libs/react-dom.production.min.js"></script>'
-  # CSP ohne unpkg.com (lokal = sicherer)
-  CSP_SCRIPT_SRC="script-src 'self'"
+  # CSP ohne unpkg.com (lokal = sicherer). 'wasm-unsafe-eval' wird vom
+  # Tesseract-OCR-Kern für WebAssembly.instantiate() benötigt — ohne dieses
+  # Token blockieren moderne Browser die WASM-Kompilierung und das dadurch
+  # ausgelöste (von tesseract.js nicht abgefangene) Promise hängt für immer,
+  # was wie ein endloser "OCR-Initialisierung"-Hänger ohne Fehlermeldung wirkt.
+  CSP_SCRIPT_SRC="script-src 'self' 'wasm-unsafe-eval'"
   echo "  ✓ Lokales React aktiv — CDN aus CSP entfernt"
 else
   REACT_SCRIPT="<script src=\"https://unpkg.com/react@18.3.1/umd/react.production.min.js\" integrity=\"$REACT_SRI\" crossorigin=\"anonymous\"></script>"
   REACTDOM_SCRIPT="<script src=\"https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js\" integrity=\"$REACTDOM_SRI\" crossorigin=\"anonymous\"></script>"
-  CSP_SCRIPT_SRC="script-src 'self' https://unpkg.com"
+  CSP_SCRIPT_SRC="script-src 'self' 'wasm-unsafe-eval' https://unpkg.com"
   echo "  ⚠️  CDN-Fallback aktiv (React lokal nicht verfügbar)"
 fi
 

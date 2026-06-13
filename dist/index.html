@@ -5,7 +5,7 @@
   <!-- CSP: unsafe-eval + unsafe-inline(scripts) entfernt; React + Tesseract-OCR
        lokal gebündelt (siehe build.sh). jsdelivr.net nur als Fallback, falls
        der Build ohne Internetverbindung lief. blob: für den OCR-Worker. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com http://localhost:11434 blob:; worker-src 'self' blob:; manifest-src 'self'; frame-src 'none'; form-action 'self'; object-src 'none'; base-uri 'self';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com http://localhost:11434 blob:; worker-src 'self' blob:; manifest-src 'self'; frame-src 'none'; form-action 'self'; object-src 'none'; base-uri 'self';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Ausgaben Trocken</title>
   <meta name="description" content="Persönliches Budget & Investment-Tracker" />
