@@ -769,19 +769,54 @@ function PreviewStep({ image, isPdf, fileName, onRetake, onAnalyze, loading, err
   );
 }
 
-// ====================== Zuschneiden ======================
-// Lässt den Nutzer per Ziehen einen Ausschnitt des aufgenommenen/hochgeladenen
-// Bilds wählen (z.B. nur den Bon ohne Hintergrund). Arbeitet mit relativen
-// Koordinaten (0..1) bezogen auf die natürliche Bildgröße, damit das Ergebnis
-// unabhängig von der Anzeigegröße korrekt zugeschnitten wird.
+// ====================== Zuschneiden (Perspektive) ======================
+// Berechnet die projektive Transformation, die das Einheitsquadrat (0,0)-(1,1)
+// auf das Viereck src = [TL, TR, BR, BL] abbildet (Heckbert-Quad-Mapping).
+// Damit lässt sich für jeden Zielpixel der zugehörige Quellpixel im Originalbild
+// finden, auch wenn das Viereck schräg/verzerrt ("Apple-Scanner"-Stil) ist.
+function _quadToSquareTransform(src) {
+  const [p0, p1, p2, p3] = src;
+  const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x;
+  const dx3 = p0.x - p1.x + p2.x - p3.x;
+  const dy1 = p1.y - p2.y, dy2 = p3.y - p2.y;
+  const dy3 = p0.y - p1.y + p2.y - p3.y;
+
+  let a, b, c, d, e, f, g, h;
+  if (Math.abs(dx3) < 1e-9 && Math.abs(dy3) < 1e-9) {
+    a = p1.x - p0.x; b = p2.x - p1.x; c = p0.x;
+    d = p1.y - p0.y; e = p2.y - p1.y; f = p0.y;
+    g = 0; h = 0;
+  } else {
+    const denom = dx1 * dy2 - dx2 * dy1;
+    g = (dx3 * dy2 - dx2 * dy3) / denom;
+    h = (dx1 * dy3 - dx3 * dy1) / denom;
+    a = p1.x - p0.x + g * p1.x;
+    b = p3.x - p0.x + h * p3.x;
+    c = p0.x;
+    d = p1.y - p0.y + g * p1.y;
+    e = p3.y - p0.y + h * p3.y;
+    f = p0.y;
+  }
+  return { a, b, c, d, e, f, g, h };
+}
+
+// Lässt den Nutzer die vier Eckpunkte des Bons unabhängig voneinander auf dem
+// Foto positionieren (auch schräg, wie bei klassischen iPhone-Dokumentenscans).
+// Beim Bestätigen wird das so markierte Viereck per Perspektiv-Transformation
+// in ein gerades Rechteck "entzerrt" — das Ergebnis enthält keinen Rand mehr.
 function CropStep({ image, onConfirm, onSkip, onBack }) {
   const imgRef = React.useRef(null);
   const stageRef = React.useRef(null);
-  const dragRef = React.useRef(null);
+  const dragIndexRef = React.useRef(null);
   const [imgSize, setImgSize] = React.useState({ w: 0, h: 0 });
-  const [rect, setRect] = React.useState({ x: 0.04, y: 0.02, w: 0.92, h: 0.96 });
-
-  const MIN_SIZE = 0.08;
+  // Punkte in relativen Koordinaten (0..1): Reihenfolge TL, TR, BR, BL
+  const [points, setPoints] = React.useState([
+    { x: 0.04, y: 0.02 },
+    { x: 0.96, y: 0.02 },
+    { x: 0.96, y: 0.98 },
+    { x: 0.04, y: 0.98 },
+  ]);
+  const [busy, setBusy] = React.useState(false);
 
   const relPos = (clientX, clientY) => {
     const el = stageRef.current;
@@ -794,37 +829,26 @@ function CropStep({ image, onConfirm, onSkip, onBack }) {
   };
 
   const onMove = (e) => {
-    const d = dragRef.current;
-    if (!d) return;
+    const idx = dragIndexRef.current;
+    if (idx == null) return;
     const pos = relPos(e.clientX, e.clientY);
-    const dx = pos.x - d.start.x;
-    const dy = pos.y - d.start.y;
-    let { x, y, w, h } = d.rect;
-    if (d.mode === "move") {
-      x = Math.min(1 - w, Math.max(0, d.rect.x + dx));
-      y = Math.min(1 - h, Math.max(0, d.rect.y + dy));
-    } else {
-      let x1 = d.rect.x, y1 = d.rect.y;
-      let x2 = d.rect.x + d.rect.w, y2 = d.rect.y + d.rect.h;
-      if (d.mode.includes("l")) x1 = Math.min(x2 - MIN_SIZE, Math.max(0, x1 + dx));
-      if (d.mode.includes("r")) x2 = Math.max(x1 + MIN_SIZE, Math.min(1, x2 + dx));
-      if (d.mode.includes("t")) y1 = Math.min(y2 - MIN_SIZE, Math.max(0, y1 + dy));
-      if (d.mode.includes("b")) y2 = Math.max(y1 + MIN_SIZE, Math.min(1, y2 + dy));
-      x = x1; y = y1; w = x2 - x1; h = y2 - y1;
-    }
-    setRect({ x, y, w, h });
+    setPoints((prev) => {
+      const next = prev.slice();
+      next[idx] = pos;
+      return next;
+    });
   };
 
   const onUp = () => {
-    dragRef.current = null;
+    dragIndexRef.current = null;
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
   };
 
-  const startDrag = (mode) => (e) => {
+  const startDrag = (idx) => (e) => {
     e.preventDefault();
     e.stopPropagation();
-    dragRef.current = { mode, start: relPos(e.clientX, e.clientY), rect: { ...rect } };
+    dragIndexRef.current = idx;
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   };
@@ -832,18 +856,80 @@ function CropStep({ image, onConfirm, onSkip, onBack }) {
   const handleConfirm = () => {
     const img = imgRef.current;
     if (!img || !imgSize.w || !imgSize.h) { onSkip(); return; }
-    const sx = Math.round(rect.x * imgSize.w);
-    const sy = Math.round(rect.y * imgSize.h);
-    const sw = Math.round(rect.w * imgSize.w);
-    const sh = Math.round(rect.h * imgSize.h);
-    const canvas = document.createElement("canvas");
-    canvas.width = sw;
-    canvas.height = sh;
-    canvas.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
-    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-    onConfirm({ dataUrl, base64, mediaType: "image/jpeg" });
+    setBusy(true);
+    // requestAnimationFrame, damit der "Wird zugeschnitten…"-Zustand noch
+    // gerendert wird, bevor die synchrone Pixel-Schleife den Main-Thread blockiert.
+    requestAnimationFrame(() => {
+      try {
+        const sw = imgSize.w, sh = imgSize.h;
+        const srcCanvas = document.createElement("canvas");
+        srcCanvas.width = sw;
+        srcCanvas.height = sh;
+        const sctx = srcCanvas.getContext("2d");
+        sctx.drawImage(img, 0, 0, sw, sh);
+        const srcData = sctx.getImageData(0, 0, sw, sh);
+        const sp = srcData.data;
+
+        const t = _quadToSquareTransform(points);
+        const [p0, p1, p2, p3] = points;
+        const edge = (a, b) => Math.hypot((b.x - a.x) * sw, (b.y - a.y) * sh);
+        let outW = Math.round(Math.max(edge(p0, p1), edge(p3, p2)));
+        let outH = Math.round(Math.max(edge(p0, p3), edge(p1, p2)));
+        const MAX_DIM = 1600;
+        if (Math.max(outW, outH) > MAX_DIM) {
+          const scale = MAX_DIM / Math.max(outW, outH);
+          outW = Math.round(outW * scale);
+          outH = Math.round(outH * scale);
+        }
+        outW = Math.max(outW, 1);
+        outH = Math.max(outH, 1);
+
+        const outCanvas = document.createElement("canvas");
+        outCanvas.width = outW;
+        outCanvas.height = outH;
+        const octx = outCanvas.getContext("2d");
+        const outData = octx.createImageData(outW, outH);
+        const dp = outData.data;
+
+        for (let y = 0; y < outH; y++) {
+          const v = (y + 0.5) / outH;
+          for (let x = 0; x < outW; x++) {
+            const u = (x + 0.5) / outW;
+            const denom = t.g * u + t.h * v + 1;
+            const sx = ((t.a * u + t.b * v + t.c) / denom) * sw;
+            const sy = ((t.d * u + t.e * v + t.f) / denom) * sh;
+            const di = (y * outW + x) * 4;
+            if (!isFinite(sx) || !isFinite(sy) || sx < 0 || sy < 0 || sx >= sw - 1 || sy >= sh - 1) {
+              dp[di] = 255; dp[di + 1] = 255; dp[di + 2] = 255; dp[di + 3] = 255;
+              continue;
+            }
+            const x0 = Math.floor(sx), y0 = Math.floor(sy);
+            const fx = sx - x0, fy = sy - y0;
+            const i00 = (y0 * sw + x0) * 4, i10 = (y0 * sw + x0 + 1) * 4;
+            const i01 = ((y0 + 1) * sw + x0) * 4, i11 = ((y0 + 1) * sw + x0 + 1) * 4;
+            for (let c = 0; c < 4; c++) {
+              const top = sp[i00 + c] * (1 - fx) + sp[i10 + c] * fx;
+              const bot = sp[i01 + c] * (1 - fx) + sp[i11 + c] * fx;
+              dp[di + c] = top * (1 - fy) + bot * fy;
+            }
+          }
+        }
+        octx.putImageData(outData, 0, 0);
+        const dataUrl = outCanvas.toDataURL("image/jpeg", 0.88);
+        const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+        onConfirm({ dataUrl, base64, mediaType: "image/jpeg" });
+      } catch (err) {
+        console.error(err);
+        onSkip();
+      } finally {
+        setBusy(false);
+      }
+    });
   };
+
+  const polyPoints = points.map((p) => `${p.x},${p.y}`).join(" ");
+  const polyPath = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ") + " Z";
+  const maskPath = `M0,0 L1,0 L1,1 L0,1 Z ${polyPath}`;
 
   return (
     <React.Fragment>
@@ -858,27 +944,24 @@ function CropStep({ image, onConfirm, onSkip, onBack }) {
           draggable={false}
           onLoad={(e) => setImgSize({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
         />
-        <div
-          className="crop-rect"
-          style={{
-            left: `${rect.x * 100}%`,
-            top: `${rect.y * 100}%`,
-            width: `${rect.w * 100}%`,
-            height: `${rect.h * 100}%`,
-          }}
-          onPointerDown={startDrag("move")}
-        >
-          <span className="crop-handle tl" onPointerDown={startDrag("tl")} />
-          <span className="crop-handle tr" onPointerDown={startDrag("tr")} />
-          <span className="crop-handle bl" onPointerDown={startDrag("bl")} />
-          <span className="crop-handle br" onPointerDown={startDrag("br")} />
-        </div>
+        <svg className="crop-overlay" viewBox="0 0 1 1" preserveAspectRatio="none">
+          <path className="crop-mask" fillRule="evenodd" d={maskPath} />
+          <polygon className="crop-outline" points={polyPoints} />
+        </svg>
+        {points.map((p, i) => (
+          <span
+            key={i}
+            className="crop-point"
+            style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
+            onPointerDown={startDrag(i)}
+          />
+        ))}
       </div>
-      <div className="crop-hint">Ziehe die Ecken, um nur den Bon ohne Hintergrund auszuwählen.</div>
+      <div className="crop-hint">Ziehe die vier Eckpunkte auf die Ecken des Bons – auch schräg möglich. Der Bereich wird entzerrt und gerade ausgeschnitten.</div>
       <div className="preview-actions">
-        <button className="receipt-btn secondary" onClick={onSkip}>Ganzes Bild verwenden</button>
-        <button className="scanner-analyze" onClick={handleConfirm}>
-          <span>Zuschneiden</span>
+        <button className="receipt-btn secondary" onClick={onSkip} disabled={busy}>Ganzes Bild verwenden</button>
+        <button className="scanner-analyze" onClick={handleConfirm} disabled={busy}>
+          <span>{busy ? "Wird zugeschnitten…" : "Zuschneiden"}</span>
         </button>
       </div>
     </React.Fragment>
