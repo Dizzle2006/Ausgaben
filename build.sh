@@ -43,6 +43,7 @@ JSX_FILES=(
   budget-heatmap.jsx
   monatsarchiv.jsx
   tax-optimizer.jsx
+  voice-entry.jsx
   app.jsx
 )
 
@@ -207,6 +208,7 @@ cat > "$DIST/index.html" << HTMLEOF
   <script src="budget-heatmap.js"></script>
   <script src="monatsarchiv.js"></script>
   <script src="tax-optimizer.js"></script>
+  <script src="voice-entry.js"></script>
   <script src="app.js"></script>
 
   <!-- PWA service worker registration (externes File — kein inline script für CSP) -->

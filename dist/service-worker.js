@@ -1,6 +1,6 @@
 // Service Worker für Ausgaben Trocken
 // Bump CACHE_VERSION when you ship changes so clients refetch.
-const CACHE_VERSION = "ausgaben-trocken-v36";
+const CACHE_VERSION = "ausgaben-trocken-v37";
 
 // Only files that actually exist on the server
 const CORE_ASSETS = [
@@ -25,6 +25,7 @@ const CORE_ASSETS = [
   "./tax-einspruch.js",
   "./budget-heatmap.js",
   "./monatsarchiv.js",
+  "./voice-entry.js",
   "./app.js",
   "./tax-config.json",
   "./manifest.webmanifest",

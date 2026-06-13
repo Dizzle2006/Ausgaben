@@ -1,4 +1,4 @@
-/* global React, ReactDOM, fmtEUR, fmtDate, monthLabel, shiftMonth, loadState, loadStateAsync, saveState, updateEncryptedCache, saveStateCached, defaultState, ensureMonth, uid, todayISO, currentYM, Icon, Section, ItemRow, VariableRow, VariableDetail, InvestmentsPage, TweaksPanel, useTweaks, TweakSection, TweakRadio, TweakButton, TweakToggle, exportState, importState, exportReceiptsCSV, ReceiptScanner, useReceiptImage, idbDeleteImage, migrateInlineImagesToIDB, STEUER_KATEGORIEN */
+/* global React, ReactDOM, fmtEUR, fmtDate, monthLabel, shiftMonth, loadState, loadStateAsync, saveState, updateEncryptedCache, saveStateCached, defaultState, ensureMonth, uid, todayISO, currentYM, Icon, Section, ItemRow, VariableRow, VariableDetail, InvestmentsPage, TweaksPanel, useTweaks, TweakSection, TweakRadio, TweakButton, TweakToggle, exportState, importState, exportReceiptsCSV, ReceiptScanner, useReceiptImage, idbDeleteImage, migrateInlineImagesToIDB, STEUER_KATEGORIEN, VoiceEntryModal */
 
 const {
   useState,
@@ -3700,6 +3700,7 @@ function App() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [interviewOpen, setInterviewOpen] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [voiceEntryOpen, setVoiceEntryOpen] = useState(false);
   const [botOpen, setBotOpen] = useState(false);
   const [budgetBotOpen, setBudgetBotOpen] = useState(false);
   const [budgetBotPendingMsg, setBudgetBotPendingMsg] = useState(null);
@@ -4138,6 +4139,56 @@ function App() {
     }
   };
 
+  // Diktierte Ausgabe übernehmen: Kategorie per Label suchen/anlegen, Eintrag
+  // im Zielmonat (nach diktiertem Datum) ablegen und Zuordnung lernen.
+  const handleSaveVoiceEntry = ({
+    place,
+    amount,
+    date,
+    categoryLabel
+  }) => {
+    setState(s => {
+      const targetYM = date && date.slice(0, 7) || s.currentMonth;
+      const withMonth = ensureMonth(s, targetYM);
+      const month = withMonth.months[targetYM];
+      let variable = month.variable;
+      let targetCat = variable.find(c => c.label === categoryLabel);
+      if (!targetCat) {
+        targetCat = {
+          id: uid(),
+          label: categoryLabel,
+          budget: 0,
+          entries: []
+        };
+        variable = [...variable, targetCat];
+      }
+      const entry = {
+        id: uid(),
+        place: place || "",
+        amount: Number(amount) || 0,
+        date: date || todayISO()
+      };
+      variable = variable.map(c => c.id === targetCat.id ? {
+        ...c,
+        entries: [...(c.entries || []), entry]
+      } : c);
+      return {
+        ...withMonth,
+        currentMonth: targetYM,
+        months: {
+          ...withMonth.months,
+          [targetYM]: {
+            ...month,
+            variable
+          }
+        }
+      };
+    });
+    if (place && categoryLabel && window.VoiceKat) {
+      window.VoiceKat.learn(place, categoryLabel);
+    }
+  };
+
   // Manueller Speichern-Handler
   const handleSave = async () => {
     if (saveStatus === "saving") return;
@@ -4425,6 +4476,16 @@ function App() {
     setState: setState,
     pendingMessage: budgetBotPendingMsg,
     onPendingMessageSent: () => setBudgetBotPendingMsg(null)
+  }), state.view === "budget" && typeof VoiceEntryModal !== "undefined" && /*#__PURE__*/React.createElement("button", {
+    className: "voice-fab",
+    onClick: () => setVoiceEntryOpen(true),
+    "aria-label": "Ausgabe diktieren",
+    title: "Ausgabe diktieren"
+  }, /*#__PURE__*/React.createElement(Icon.Mic, null)), typeof VoiceEntryModal !== "undefined" && /*#__PURE__*/React.createElement(VoiceEntryModal, {
+    open: voiceEntryOpen,
+    onClose: () => setVoiceEntryOpen(false),
+    categories: state.months[state.currentMonth]?.variable || [],
+    onSave: handleSaveVoiceEntry
   }), state.view === "tax" && typeof SteuerBotModal !== "undefined" && /*#__PURE__*/React.createElement("button", {
     className: "bot-fab",
     onClick: () => setBotOpen(true),

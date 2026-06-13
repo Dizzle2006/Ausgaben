@@ -5866,3 +5866,142 @@ body { font-size: var(--font-size-base); }
   background: var(--surface);
   color: var(--text);
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Diktier-FAB + Modal (Ausgabe per Spracheingabe erfassen)
+   ════════════════════════════════════════════════════════════════════════ */
+.voice-fab {
+  position: fixed;
+  left: 20px;
+  right: auto;
+  bottom: calc(var(--tab-bar-h) + 18px + env(safe-area-inset-bottom, 0px));
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong, var(--border));
+  background: var(--surface);
+  color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 10px 24px rgba(20, 16, 8, 0.18), 0 2px 6px rgba(20, 16, 8, 0.12);
+  cursor: pointer;
+  z-index: 90;
+  transition: transform 0.18s, box-shadow 0.18s, background 0.18s, color 0.18s;
+}
+.voice-fab:hover {
+  transform: translateY(-2px);
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 14px 32px rgba(20, 16, 8, 0.22), 0 3px 8px rgba(20, 16, 8, 0.14);
+}
+.voice-fab:active { transform: translateY(0); }
+.voice-fab svg { width: 24px; height: 24px; }
+
+@media (min-width: 760px) {
+  .voice-fab {
+    left: 24px;
+    bottom: calc(var(--tab-bar-h) + 38px);
+  }
+}
+
+/* Mikrofon-Button im Diktier-Modal */
+.voice-mic-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 0 4px;
+}
+.voice-mic-btn {
+  flex-shrink: 0;
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong, var(--border));
+  background: var(--surface-2);
+  color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.voice-mic-btn svg { width: 28px; height: 28px; }
+.voice-mic-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.voice-mic-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.voice-mic-btn.listening {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  animation: voicePulse 1.4s ease-in-out infinite;
+}
+@keyframes voicePulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); }
+  50% { box-shadow: 0 0 0 10px transparent; }
+}
+.voice-mic-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.voice-warning {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+
+.voice-error {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.voice-manual-input {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+}
+.voice-manual-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.voice-transcript {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+
+.voice-input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  outline: none;
+  padding: 6px 8px;
+  font-family: inherit;
+}
+.voice-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.receipt-field.total .voice-input {
+  font-family: var(--font-num);
+  text-align: right;
+  color: var(--accent);
+  font-size: 16px;
+}
