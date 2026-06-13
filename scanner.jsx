@@ -304,40 +304,71 @@ function parseReceiptText(rawText) {
   const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
   // ── Datum ──────────────────────────────────────────────────────
+  // Auf deutschen Kassenbons steht das (Transaktions-)Datum meist ganz unten,
+  // oft bei "Start"/"Ende" (Kartenzahlungs-Beleg) oder "Datum". Diese Zeilen
+  // haben Vorrang vor einem irgendwo sonst im Text gefundenen Datum (z.B.
+  // einem Mindesthaltbarkeitsdatum auf einem Coupon).
   const DATE_PATTERNS = [
     { re: /\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b/, fmt: (m) => `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}` },
     { re: /\b(\d{1,2})\.(\d{1,2})\.(\d{2})\b/,  fmt: (m) => { const y = +m[3] < 50 ? `20${m[3]}` : `19${m[3]}`; return `${y}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`; } },
     { re: /\b(\d{4})-(\d{2})-(\d{2})\b/,         fmt: (m) => `${m[1]}-${m[2]}-${m[3]}` },
     { re: /\b(\d{1,2})[\/](\d{1,2})[\/](\d{4})\b/, fmt: (m) => `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}` },
   ];
+  const matchDate = (text) => {
+    for (const { re, fmt } of DATE_PATTERNS) {
+      const m = text.match(re);
+      if (!m) continue;
+      const candidate = fmt(m);
+      const yr = parseInt(candidate.slice(0, 4));
+      if (yr < 1990 || yr > 2099) continue;
+      return { candidate, conf: re.source.includes("\\d{4}") ? "hoch" : "mittel" };
+    }
+    return null;
+  };
   let datum = null;
   let datumConf = "niedrig";
-  for (const { re, fmt } of DATE_PATTERNS) {
-    const m = rawText.match(re);
-    if (!m) continue;
-    const candidate = fmt(m);
-    const yr = parseInt(candidate.slice(0, 4));
-    if (yr < 1990 || yr > 2099) continue;
-    datum = candidate;
-    // Konfidenz: 4-stelliges Jahr = hoch, 2-stellig = mittel
-    datumConf = re.source.includes("\\d{4}") ? "hoch" : "mittel";
-    break;
+  for (const keyword of [/start/i, /ende/i, /datum/i]) {
+    for (const line of lines) {
+      if (!keyword.test(line)) continue;
+      const found = matchDate(line);
+      if (found) { datum = found.candidate; datumConf = found.conf; break; }
+    }
+    if (datum) break;
+  }
+  if (!datum) {
+    const found = matchDate(rawText);
+    if (found) { datum = found.candidate; datumConf = found.conf; }
   }
 
   // ── Gesamtbetrag ───────────────────────────────────────────────
-  // Schritt 1: Keyword-Suche
-  const TOTAL_RE = /(?:ge?samt(?:betrag)?|total|summe|zu\s*zahlen|endbetrag|zahlbetrag|rechnungsbetrag|bar|gegeben)[^\d\n]{0,30}([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})/gi;
   let gesamtbetrag = 0;
   let betragsConf = "niedrig";
   let m;
-  const totalMatches = [];
-  while ((m = TOTAL_RE.exec(rawText)) !== null) totalMatches.push(parseDE(m[1]));
-  if (totalMatches.length) {
-    gesamtbetrag = Math.max(...totalMatches);
-    betragsConf = "hoch";
+
+  // Schritt 1: "Summe" (nicht "Zwischensumme") – auf deutschen Kassenbons
+  // praktisch immer der Endbetrag, gedruckt ganz unten. Von unten nach
+  // oben suchen; der Betrag kann in derselben oder der folgenden Zeile
+  // stehen.
+  for (let i = lines.length - 1; i >= 0 && !gesamtbetrag; i--) {
+    if (!/\bsumme\b/i.test(lines[i]) || /zwischensumme/i.test(lines[i])) continue;
+    for (const line of [lines[i], lines[i + 1] || ""]) {
+      const nums = [...line.matchAll(/([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})/g)].map((x) => parseDE(x[1]));
+      if (nums.length) { gesamtbetrag = Math.max(...nums); betragsConf = "hoch"; break; }
+    }
   }
 
-  // Schritt 2: Fallback – größter €-Betrag im Text
+  // Schritt 2: andere Schlüsselwörter (Gesamt, Total, zu zahlen, …)
+  if (!gesamtbetrag) {
+    const TOTAL_RE = /(?:ge?samt(?:betrag)?|total|zu\s*zahlen|endbetrag|zahlbetrag|rechnungsbetrag|bar|gegeben)[^\d\n]{0,30}([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})/gi;
+    const totalMatches = [];
+    while ((m = TOTAL_RE.exec(rawText)) !== null) totalMatches.push(parseDE(m[1]));
+    if (totalMatches.length) {
+      gesamtbetrag = Math.max(...totalMatches);
+      betragsConf = "hoch";
+    }
+  }
+
+  // Schritt 3: Fallback – größter €-Betrag im Text
   if (!gesamtbetrag) {
     const EUR_RE = /([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*[€E]/g;
     let maxV = 0;
@@ -348,7 +379,7 @@ function parseReceiptText(rawText) {
     if (maxV) { gesamtbetrag = maxV; betragsConf = "mittel"; }
   }
 
-  // Schritt 3: Fallback – größte Zahl in oder direkt nach einer
+  // Schritt 4: Fallback – größte Zahl in oder direkt nach einer
   // Gesamt/Summe-Zeile (manche Kassenbons drucken den Betrag in der
   // nächsten Zeile statt in derselben)
   if (!gesamtbetrag) {
@@ -365,10 +396,12 @@ function parseReceiptText(rawText) {
   }
 
   // ── MwSt 19% / 7% ──────────────────────────────────────────────
-  // Erlaubt Dezimal-Prozentangaben ("19,0%", "7,00 %") und Beträge in
-  // derselben Zeile vor oder nach der Prozentangabe.
-  const MwSt19_RE = /(?:mwst\.?\s*(?:a\s*)?19(?:[.,]\d+)?\s*%?|ust\.?\s*19(?:[.,]\d+)?\s*%?|19(?:[.,]\d+)?\s*%\s*(?:mwst|ust)?)[^\d\n]{0,25}([\d]+[.,][\d]{2})/i;
-  const MwSt7_RE  = /(?:mwst\.?\s*(?:b\s*)?7(?:[.,]\d+)?\s*%?|ust\.?\s*7(?:[.,]\d+)?\s*%?|7(?:[.,]\d+)?\s*%\s*(?:mwst|ust)?)[^\d\n]{0,25}([\d]+[.,][\d]{2})/i;
+  // Auf deutschen Kassenbons steht die MwSt-Aufstellung direkt über der
+  // Summe, gekennzeichnet mit "A" (= 19%, Regelsatz) und "B" (= 7%,
+  // ermäßigter Satz) — zusätzlich zu den expliziten "MwSt"/"USt"-Varianten
+  // mit Dezimal-Prozentangaben ("19,0%", "7,00 %").
+  const MwSt19_RE = /(?:mwst\.?\s*(?:a\s*)?19(?:[.,]\d+)?\s*%?|ust\.?\s*19(?:[.,]\d+)?\s*%?|19(?:[.,]\d+)?\s*%\s*(?:mwst|ust)?|\bA[\s=:]{0,3}19(?:[.,]\d+)?\s*%?)[^\d\n]{0,25}([\d]+[.,][\d]{2})/i;
+  const MwSt7_RE  = /(?:mwst\.?\s*(?:b\s*)?7(?:[.,]\d+)?\s*%?|ust\.?\s*7(?:[.,]\d+)?\s*%?|7(?:[.,]\d+)?\s*%\s*(?:mwst|ust)?|\bB[\s=:]{0,3}7(?:[.,]\d+)?\s*%?)[^\d\n]{0,25}([\d]+[.,][\d]{2})/i;
   const m19 = rawText.match(MwSt19_RE);
   const m7  = rawText.match(MwSt7_RE);
   const mwst_19 = m19 ? parseDE(m19[1]) : 0;
@@ -381,11 +414,14 @@ function parseReceiptText(rawText) {
   const rechnConf = rechnungsnummer ? "hoch" : "niedrig";
 
   // ── Händlername ─────────────────────────────────────────────────
-  // Erste Zeile, die kein Datum / keine Zahl-dominierte Zeile / kein bekanntes Label ist
+  // Der Händlername steht immer ganz oben auf dem Bon: erste Zeile mit
+  // mindestens einem Buchstaben, die kein Datum / keine Zahl-dominierte
+  // Zeile / kein bekanntes Label / keine reine Trennlinie ist.
   const SKIP_RE = /^(\d{1,2}[.:\/]\d{1,2}|bon|beleg|kassenbon|quittung|rechnung|tel\.|fax|www\.|http|ust|steuernr|datum|uhrzeit|kasse|vielen dank|danke)/i;
   let haendler = "";
   let haendlerConf = "niedrig";
   for (const line of lines.slice(0, 12)) {
+    if (!/[a-zA-ZäöüÄÖÜß]/.test(line)) continue; // reine Zahlen/Trennlinien
     const digits = (line.match(/\d/g) || []).length;
     if (digits / line.length > 0.45) continue; // zahlen-dominiert
     if (SKIP_RE.test(line)) continue;
@@ -962,23 +998,6 @@ function ReceiptCard({ data, categories, image, onChange, onAccept, onDiscard })
               update({ mwst_7: v === "" ? 0 : parseFloat(v) });
             }}
             className={`receipt-field-value ${Number(data.mwst_7) > 0 ? "" : "empty"}`}
-            style={{
-              border: "none", background: "transparent", outline: "none",
-              fontFamily: "var(--font-num)", padding: 0, width: "100%",
-            }}
-          />
-        </div>
-        <div className="receipt-field mono" style={{ gridColumn: "1 / -1" }}>
-          <div className="receipt-field-label">
-            <ConfDot level={conf.rechnungsnummer} />
-            Rechnungsnummer
-          </div>
-          <input
-            type="text"
-            value={data.rechnungsnummer || ""}
-            placeholder="Nicht erkannt"
-            onChange={(e) => update({ rechnungsnummer: e.target.value || null })}
-            className={`receipt-field-value ${data.rechnungsnummer ? "" : "empty"}`}
             style={{
               border: "none", background: "transparent", outline: "none",
               fontFamily: "var(--font-num)", padding: 0, width: "100%",
