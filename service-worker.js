@@ -1,6 +1,6 @@
 // Service Worker für Ausgaben Trocken
 // Bump CACHE_VERSION when you ship changes so clients refetch.
-const CACHE_VERSION = "ausgaben-trocken-v26";
+const CACHE_VERSION = "ausgaben-trocken-v27";
 
 // Only files that actually exist on the server
 const CORE_ASSETS = [
@@ -61,9 +61,14 @@ self.addEventListener("fetch", (event) => {
   const isAppFile = APP_EXTS.test(url.pathname) || url.pathname.endsWith("/");
 
   if (isAppFile) {
-    // Network-first: immer vom Server, Fallback auf Cache bei Offline
+    // Network-first: immer vom Server, Fallback auf Cache bei Offline.
+    // FIX: "no-store" erzwingt einen echten Netzwerk-Request — sonst kann
+    // der Browser-HTTP-Cache (GitHub Pages sendet Cache-Control: max-age=600)
+    // hier eine bis zu 10 Minuten alte Antwort zurückgeben, obwohl der SW
+    // "network-first" gedacht ist. Dadurch wirken Updates erst nach bis zu
+    // 10 Minuten bzw. gar nicht, bis der HTTP-Cache abläuft.
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request.url, { cache: "no-store" })
         .then((response) => {
           if (response && response.status === 200) {
             const clone = response.clone();
