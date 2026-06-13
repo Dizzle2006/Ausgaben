@@ -43,10 +43,19 @@ async function _ensureTesseract(onProgress) {
 
   if (_tesseractLoading) {
     return new Promise((resolve, reject) =>
-      _pendingResolvers.push({ resolve, reject })
+      _pendingResolvers.push({ resolve, reject, onProgress })
     );
   }
   _tesseractLoading = true;
+
+  // Fortschritt an diesen Aufruf UND an alle wartenden Aufrufe melden
+  // (z.B. den Klick auf "Beleg erkennen", während im Hintergrund bereits
+  // ein Pre-Warm-Ladevorgang läuft) — sonst sieht der wartende Aufruf nur
+  // die statische Erstmeldung "OCR wird initialisiert…" ohne Updates.
+  const broadcast = (msg) => {
+    onProgress?.(msg);
+    _pendingResolvers.forEach((p) => p.onProgress?.(msg));
+  };
 
   try {
     // Script-Tag lazy ins DOM – nur einmal. FIX: Diese Ladephase lag bisher
@@ -76,22 +85,42 @@ async function _ensureTesseract(onProgress) {
       });
     }
 
-    onProgress?.("Sprachpaket wird geladen…");
+    broadcast("Sprachpaket wird geladen…");
 
-    const worker = await Tesseract.createWorker(lang, 1, {
+    // Sicherheits-Timeout: falls Core/Sprachpaket-Download hängen bleibt,
+    // ohne dass der Logger je ein Fortschritts-Event meldet, nach 2 Minuten
+    // mit klarer Fehlermeldung abbrechen statt endlos zu warten.
+    const createWorker = Tesseract.createWorker(lang, 1, {
       logger: (m) => {
         if (m.status === "recognizing text") {
-          onProgress?.(`Texterkennung… ${Math.round((m.progress || 0) * 100)}%`);
+          broadcast(`Texterkennung… ${Math.round((m.progress || 0) * 100)}%`);
         } else if (m.status === "loading tesseract core") {
-          onProgress?.("Tesseract-Kern lädt…");
+          broadcast("Tesseract-Kern lädt…");
         } else if (m.status === "loading language traineddata") {
-          onProgress?.("Sprachdaten werden geladen…");
+          broadcast("Sprachdaten werden geladen…");
         } else if (m.status === "initializing tesseract") {
-          onProgress?.("Wird initialisiert…");
+          broadcast("Wird initialisiert…");
         }
       },
       cacheMethod: "readWrite",
     });
+    let timedOut = false;
+    // Falls der Worker doch noch zustande kommt, nachdem wir bereits per
+    // Timeout aufgegeben haben: nicht unbemerkt im Hintergrund weiterlaufen
+    // lassen, sondern direkt wieder schließen.
+    createWorker.then((w) => { if (timedOut) { try { w.terminate?.(); } catch {} } }, () => {});
+
+    const worker = await Promise.race([
+      createWorker,
+      new Promise((_, reject) => setTimeout(() => {
+        timedOut = true;
+        reject(new Error(
+          "OCR-Initialisierung hat zu lange gedauert (Zeitüberschreitung nach 2 Minuten).\n" +
+          "Bitte Internetverbindung prüfen oder in den Einstellungen unter\n" +
+          "„Scanner & OCR“ die Sprache auf „Deutsch“ stellen und erneut versuchen."
+        ));
+      }, 120000)),
+    ]);
 
     _tesseractWorker  = worker;
     _tesseractReady   = true;
