@@ -137,6 +137,7 @@ async function _ensureTesseract(onProgress) {
     _tesseractReady   = true;
     _tesseractLoading = false;
     _tesseractLang    = lang;
+    _markOcrInstalled(lang);
     _pendingResolvers.forEach((p) => p.resolve(worker));
     _pendingResolvers = [];
     return worker;
@@ -153,6 +154,40 @@ async function _ensureTesseract(onProgress) {
     throw err;
   }
 }
+
+// ====================== OCR-Paket: Vorab-Installation (Einstellungen) =====
+// Merkt sich pro Sprache, ob Worker/Kern/Sprachdaten schon einmal erfolgreich
+// geladen wurden — damit die Einstellungen "Installiert" anzeigen können,
+// auch nach einem Reload (Service-Worker-Cache bleibt erhalten).
+function _markOcrInstalled(lang) {
+  try {
+    const installed = JSON.parse(localStorage.getItem("ocrInstalledLangs") || "[]");
+    if (!installed.includes(lang)) {
+      installed.push(lang);
+      localStorage.setItem("ocrInstalledLangs", JSON.stringify(installed));
+    }
+  } catch {}
+}
+
+function isOcrInstalled(lang) {
+  const l = (lang || window.__ocrLang || "deu+eng").trim();
+  if (_tesseractReady && _tesseractLang === l) return true;
+  try {
+    const installed = JSON.parse(localStorage.getItem("ocrInstalledLangs") || "[]");
+    return installed.includes(l);
+  } catch {
+    return false;
+  }
+}
+window.isOcrInstalled = isOcrInstalled;
+
+// Lädt Worker/Kern/Sprachpaket vorab (z.B. über WLAN), damit beim eigentlichen
+// Scan nichts mehr nachgeladen werden muss und Download + Bildverarbeitung
+// nicht um Ressourcen konkurrieren.
+function installOcrPackage(onProgress) {
+  return _ensureTesseract(onProgress);
+}
+window.installOcrPackage = installOcrPackage;
 
 // Verkleinert das Bild für die OCR auf max. 1000px (lange Seite).
 // Die Erkennungszeit von Tesseract skaliert etwa quadratisch mit der

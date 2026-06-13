@@ -2616,6 +2616,60 @@ function SettingsRow({
     className: "settings-switch-thumb"
   })));
 }
+
+// ====================== OCR-Paket: Vorab-Installation ======================
+// Lädt Tesseract-Worker, WASM-Kern und Sprachpaket für die aktuell gewählte
+// OCR-Sprache vorab herunter (z.B. über WLAN), damit beim Belegscan selbst
+// nichts mehr nachgeladen werden muss.
+function OcrInstallRow({
+  lang
+}) {
+  const [installed, setInstalled] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [status, setStatus] = React.useState("");
+  const [error, setError] = React.useState(null);
+  React.useEffect(() => {
+    setInstalled(typeof window.isOcrInstalled === "function" && window.isOcrInstalled(lang));
+    setError(null);
+  }, [lang]);
+  const handleInstall = async () => {
+    setBusy(true);
+    setError(null);
+    setStatus("Startet…");
+    try {
+      await window.installOcrPackage?.(msg => setStatus(msg));
+      setInstalled(true);
+    } catch (e) {
+      setError(e.message || "Installation fehlgeschlagen.");
+    } finally {
+      setBusy(false);
+      setStatus("");
+    }
+  };
+  const sizeHint = lang === "deu+eng" ? "~8 MB" : "~5 MB";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "settings-row-block",
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "settings-row-text"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "settings-row-title"
+  }, "OCR-Paket"), /*#__PURE__*/React.createElement("div", {
+    className: "settings-row-sub"
+  }, installed ? "Erkennungs-Engine & Sprachpaket sind heruntergeladen und einsatzbereit — beim Scannen wird nichts mehr nachgeladen." : `Lädt Erkennungs-Engine & Sprachpaket vorab herunter (${sizeHint}), damit der Scan selbst nicht mehr warten muss.`)), !installed && /*#__PURE__*/React.createElement("button", {
+    className: "settings-action primary",
+    onClick: handleInstall,
+    disabled: busy
+  }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "scanner-spinner"
+  }), /*#__PURE__*/React.createElement("span", null, status || "Wird installiert…")) : "OCR-Paket herunterladen"), error && /*#__PURE__*/React.createElement("div", {
+    className: "scanner-error"
+  }, error));
+}
 function SettingsSubpageHeader({
   title,
   onBack
@@ -3509,7 +3563,9 @@ function SettingsSheet({
     }]
   }), /*#__PURE__*/React.createElement("div", {
     className: "settings-info-box"
-  }, "Beim ersten Scan wird das Sprachpaket heruntergeladen (~5\xA0MB) und danach offline gecacht.")), page === "notifications" && /*#__PURE__*/React.createElement("div", {
+  }, "Ohne Vorab-Installation wird das Sprachpaket beim ersten Scan heruntergeladen und danach offline gecacht."), /*#__PURE__*/React.createElement(OcrInstallRow, {
+    lang: tweaks.ocrLang
+  })), page === "notifications" && /*#__PURE__*/React.createElement("div", {
     className: "settings-body"
   }, /*#__PURE__*/React.createElement(SettingsRow, {
     title: "Monatsabschluss-Erinnerung",

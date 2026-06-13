@@ -2257,6 +2257,63 @@ function SettingsRow({ title, sub, value, onChange, kind = "toggle", options }) 
 
 }
 
+// ====================== OCR-Paket: Vorab-Installation ======================
+// Lädt Tesseract-Worker, WASM-Kern und Sprachpaket für die aktuell gewählte
+// OCR-Sprache vorab herunter (z.B. über WLAN), damit beim Belegscan selbst
+// nichts mehr nachgeladen werden muss.
+function OcrInstallRow({ lang }) {
+  const [installed, setInstalled] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [status, setStatus] = React.useState("");
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    setInstalled(typeof window.isOcrInstalled === "function" && window.isOcrInstalled(lang));
+    setError(null);
+  }, [lang]);
+
+  const handleInstall = async () => {
+    setBusy(true);
+    setError(null);
+    setStatus("Startet…");
+    try {
+      await window.installOcrPackage?.((msg) => setStatus(msg));
+      setInstalled(true);
+    } catch (e) {
+      setError(e.message || "Installation fehlgeschlagen.");
+    } finally {
+      setBusy(false);
+      setStatus("");
+    }
+  };
+
+  const sizeHint = lang === "deu+eng" ? "~8 MB" : "~5 MB";
+
+  return (
+    <div className="settings-row-block" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="settings-row-text">
+        <div className="settings-row-title">OCR-Paket</div>
+        <div className="settings-row-sub">
+          {installed
+            ? "Erkennungs-Engine & Sprachpaket sind heruntergeladen und einsatzbereit — beim Scannen wird nichts mehr nachgeladen."
+            : `Lädt Erkennungs-Engine & Sprachpaket vorab herunter (${sizeHint}), damit der Scan selbst nicht mehr warten muss.`}
+        </div>
+      </div>
+      {!installed &&
+        <button className="settings-action primary" onClick={handleInstall} disabled={busy}>
+          {busy ?
+            <React.Fragment>
+              <span className="scanner-spinner" />
+              <span>{status || "Wird installiert…"}</span>
+            </React.Fragment>
+          : "OCR-Paket herunterladen"}
+        </button>
+      }
+      {error && <div className="scanner-error">{error}</div>}
+    </div>
+  );
+}
+
 function SettingsSubpageHeader({ title, onBack }) {
   return (
     <div className="settings-subpage-header">
@@ -2751,8 +2808,9 @@ function SettingsSheet({
                 value={tweaks.ocrLang} onChange={(v) => setTweak("ocrLang", v)}
                 options={[{ v: "deu", l: "Deutsch" }, { v: "eng", l: "Englisch" }, { v: "deu+eng", l: "Beides" }]} />
                   <div className="settings-info-box">
-                    Beim ersten Scan wird das Sprachpaket heruntergeladen (~5 MB) und danach offline gecacht.
+                    Ohne Vorab-Installation wird das Sprachpaket beim ersten Scan heruntergeladen und danach offline gecacht.
                   </div>
+                  <OcrInstallRow lang={tweaks.ocrLang} />
                 </div>
               }
 
