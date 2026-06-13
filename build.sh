@@ -113,8 +113,9 @@ cat > "$DIST/index.html" << HTMLEOF
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <!-- CSP: unsafe-eval + unsafe-inline(scripts) entfernt; React lokal wenn verfügbar -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${CSP_SCRIPT_SRC}; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com http://localhost:11434 blob:; worker-src 'self'; manifest-src 'self'; frame-src 'none'; form-action 'self'; object-src 'none'; base-uri 'self';">
+  <!-- CSP: unsafe-eval + unsafe-inline(scripts) entfernt; React lokal wenn verfügbar.
+       jsdelivr.net + blob: sind für den lazy geladenen Tesseract-OCR-Worker nötig. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${CSP_SCRIPT_SRC} https://cdn.jsdelivr.net; style-src-elem 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com https://cdn.jsdelivr.net http://localhost:11434 blob:; worker-src 'self' blob:; manifest-src 'self'; frame-src 'none'; form-action 'self'; object-src 'none'; base-uri 'self';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Ausgaben Trocken</title>
   <meta name="description" content="Persönliches Budget & Investment-Tracker" />

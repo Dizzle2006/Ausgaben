@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <!-- Content Security Policy:
-       - script-src: nur 'self' + unpkg.com (React-CDN)
-       - connect-src: lokales Ollama (Mac + iPhone-Heimnetz)
+       - script-src: 'self' + unpkg.com (React-CDN) + jsdelivr.net (Tesseract-OCR)
+       - connect-src: lokales Ollama (Mac + iPhone-Heimnetz) + jsdelivr.net (OCR-Sprachdaten)
+       - worker-src: 'self' + blob: (Tesseract läuft in einem Web Worker)
        - Alle anderen Verbindungen geblockt — keine Daten verlassen das Gerät -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com http://localhost:11434 http://127.0.0.1:11434 http: blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com https://cdn.jsdelivr.net http://localhost:11434 http://127.0.0.1:11434 http: blob:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Ausgaben Trocken</title>
   <meta name="description" content="Persönliches Budget & Investment-Tracker" />

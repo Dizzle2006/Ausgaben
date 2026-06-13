@@ -12,7 +12,7 @@
 //
 // LOKALE OCR: Tesseract.js wird per CDN lazy ins DOM geladen, der Worker
 // einmalig initialisiert und im Modul-Level gehalten. Sprachpakete landen
-// dank cacheMethod "write" im IndexedDB-Cache — danach läuft alles offline.
+// dank cacheMethod "readWrite" im IndexedDB-Cache — danach läuft alles offline.
 
 // ====================== Tesseract Singleton + lazy loader ==================
 let _tesseractWorker = null;
@@ -48,19 +48,31 @@ async function _ensureTesseract(onProgress) {
     }));
   }
   _tesseractLoading = true;
-
-  // Script-Tag lazy ins DOM – nur einmal
-  if (typeof Tesseract === "undefined") {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-      s.onload = resolve;
-      s.onerror = () => reject(new Error("Tesseract.js konnte nicht geladen werden.\n" + "Einmalig ist eine Internetverbindung nötig, um das Sprachpaket herunterzuladen."));
-      document.head.appendChild(s);
-    });
-  }
-  onProgress?.("Sprachpaket wird geladen…");
   try {
+    // Script-Tag lazy ins DOM – nur einmal. FIX: Diese Ladephase lag bisher
+    // *außerhalb* des try/catch — schlug sie fehl (CDN nicht erreichbar,
+    // Timeout, …), blieb _tesseractLoading dauerhaft "true" und jeder
+    // weitere Scan-Versuch hing in der "if (_tesseractLoading)"-Warteschlange
+    // ohne je aufzulösen → endlos drehender Lade-Spinner.
+    if (typeof Tesseract === "undefined") {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+        const timer = setTimeout(() => {
+          reject(new Error("Tesseract.js konnte nicht geladen werden (Zeitüberschreitung).\n" + "Bitte Internetverbindung prüfen und erneut versuchen."));
+        }, 20000);
+        s.onload = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        s.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error("Tesseract.js konnte nicht geladen werden.\n" + "Einmalig ist eine Internetverbindung nötig, um das Sprachpaket herunterzuladen."));
+        };
+        document.head.appendChild(s);
+      });
+    }
+    onProgress?.("Sprachpaket wird geladen…");
     const worker = await Tesseract.createWorker(lang, 1, {
       logger: m => {
         if (m.status === "recognizing text") {
@@ -73,7 +85,7 @@ async function _ensureTesseract(onProgress) {
           onProgress?.("Wird initialisiert…");
         }
       },
-      cacheMethod: "write"
+      cacheMethod: "readWrite"
     });
     _tesseractWorker = worker;
     _tesseractReady = true;
@@ -84,19 +96,55 @@ async function _ensureTesseract(onProgress) {
     return worker;
   } catch (e) {
     _tesseractLoading = false;
-    const err = new Error("OCR konnte nicht initialisiert werden.\n" + "Einmalig ist eine Internetverbindung nötig, um das Sprachpaket herunterzuladen.");
+    const err = e instanceof Error && /Tesseract\.js konnte nicht/.test(e.message) ? e : new Error("OCR konnte nicht initialisiert werden.\n" + "Einmalig ist eine Internetverbindung nötig, um das Sprachpaket herunterzuladen.");
     _pendingResolvers.forEach(p => p.reject(err));
     _pendingResolvers = [];
     throw err;
+  }
+}
+
+// Verkleinert das Bild für die OCR auf max. 1100px (lange Seite).
+// Die Erkennungszeit von Tesseract skaliert etwa quadratisch mit der
+// Bildgröße — bei 1600px (Speicher-/Vorschaugröße) dauert ein Scan ein
+// Vielfaches länger als bei ~1100px, ohne dass die Texterkennung bei
+// typischen Kassenbons spürbar schlechter wird.
+async function _downscaleForOcr(dataUrl, maxDim = 1100) {
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = dataUrl;
+    });
+    let {
+      width: w,
+      height: h
+    } = img;
+    if (Math.max(w, h) <= maxDim) return dataUrl;
+    if (w > h) {
+      h = Math.round(h * maxDim / w);
+      w = maxDim;
+    } else {
+      w = Math.round(w * maxDim / h);
+      h = maxDim;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return dataUrl; // Fallback: Original verwenden
   }
 }
 async function runOCR(imageDataUrl, onProgress) {
   onProgress?.("OCR wird initialisiert…");
   const worker = await _ensureTesseract(onProgress);
   onProgress?.("Bild wird verarbeitet…");
+  const ocrImage = await _downscaleForOcr(imageDataUrl);
   const {
     data
-  } = await worker.recognize(imageDataUrl);
+  } = await worker.recognize(ocrImage);
   return data.text || "";
 }
 
