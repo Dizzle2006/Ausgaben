@@ -56,15 +56,28 @@ async function _ensureTesseract(onProgress) {
     }));
   }
   _tesseractLoading = true;
+  const loadStart = Date.now();
 
   // Fortschritt an diesen Aufruf UND an alle wartenden Aufrufe melden
   // (z.B. den Klick auf "Beleg erkennen", während im Hintergrund bereits
   // ein Pre-Warm-Ladevorgang läuft) — sonst sieht der wartende Aufruf nur
   // die statische Erstmeldung "OCR wird initialisiert…" ohne Updates.
-  const broadcast = msg => {
+  let basePhase = "OCR wird initialisiert…";
+  const emit = msg => {
     onProgress?.(msg);
     _pendingResolvers.forEach(p => p.onProgress?.(msg));
   };
+  const elapsed = () => Math.round((Date.now() - loadStart) / 1000);
+  const broadcast = msg => {
+    basePhase = msg;
+    emit(`${msg} (${elapsed()}s)`);
+  };
+  // Heartbeat: aktualisiert die Anzeige jede Sekunde mit der verstrichenen
+  // Zeit, auch wenn Tesseract.js gerade keine Fortschritts-Events liefert
+  // (z.B. während des ~4 MB großen WASM-Kern-Downloads, der per blockierendem
+  // importScripts ohne Zwischenmeldungen läuft). So sieht man im UI, dass im
+  // Hintergrund noch etwas passiert, statt dass die Anzeige stehen bleibt.
+  const heartbeat = setInterval(() => emit(`${basePhase} (${elapsed()}s)`), 1000);
   try {
     // Script-Tag lazy ins DOM – nur einmal. FIX: Diese Ladephase lag bisher
     // *außerhalb* des try/catch — schlug sie fehl (CDN nicht erreichbar,
@@ -102,11 +115,13 @@ async function _ensureTesseract(onProgress) {
         if (m.status === "recognizing text") {
           broadcast(`Texterkennung… ${Math.round((m.progress || 0) * 100)}%`);
         } else if (m.status === "loading tesseract core") {
-          broadcast("Tesseract-Kern lädt…");
+          broadcast(m.progress >= 1 ? "Tesseract-Kern geladen" : "Tesseract-Kern wird heruntergeladen…");
         } else if (m.status === "loading language traineddata") {
-          broadcast("Sprachdaten werden geladen…");
+          broadcast(`Sprachdaten werden geladen… ${Math.round((m.progress || 0) * 100)}%`);
         } else if (m.status === "initializing tesseract") {
-          broadcast("Wird initialisiert…");
+          broadcast(m.progress >= 1 ? "Tesseract-Kern initialisiert" : "Tesseract-Kern wird initialisiert…");
+        } else if (m.status === "initializing api") {
+          broadcast("Letzte Vorbereitungen…");
         }
       },
       cacheMethod: "readWrite"
@@ -140,6 +155,8 @@ async function _ensureTesseract(onProgress) {
     _pendingResolvers.forEach(p => p.reject(err));
     _pendingResolvers = [];
     throw err;
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
