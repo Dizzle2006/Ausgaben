@@ -114,12 +114,12 @@ async function _ensureTesseract(onProgress) {
   }
 }
 
-// Verkleinert das Bild für die OCR auf max. 1100px (lange Seite).
+// Verkleinert das Bild für die OCR auf max. 1000px (lange Seite).
 // Die Erkennungszeit von Tesseract skaliert etwa quadratisch mit der
 // Bildgröße — bei 1600px (Speicher-/Vorschaugröße) dauert ein Scan ein
-// Vielfaches länger als bei ~1100px, ohne dass die Texterkennung bei
+// Vielfaches länger als bei ~1000px, ohne dass die Texterkennung bei
 // typischen Kassenbons spürbar schlechter wird.
-async function _downscaleForOcr(dataUrl, maxDim = 1100) {
+async function _downscaleForOcr(dataUrl, maxDim = 1000) {
   try {
     const img = await new Promise((resolve, reject) => {
       const i = new Image();
@@ -784,6 +784,17 @@ function ReceiptScanner({ open, onClose, currentMonth, categories, onAccept, rec
       setError(null); setLoading(false); setStatusText(""); setResult(null);
       setDupWarning(null);
     }
+  }, [open]);
+
+  // Pre-Warm: Tesseract.js (Skript-Download + Sprachpaket + Worker-Init)
+  // bereits beim Öffnen des Scanners im Hintergrund starten — nicht erst
+  // beim Klick auf "Beleg erkennen". Dadurch laufen Download/Initialisierung
+  // parallel zur Aufnahme/Auswahl des Belegs, was den gefühlten Wartevorgang
+  // beim eigentlichen Scan deutlich verkürzt. Fehler werden hier ignoriert,
+  // sie werden beim eigentlichen Scan erneut behandelt und angezeigt.
+  React.useEffect(() => {
+    if (!open) return;
+    _ensureTesseract().catch(() => {});
   }, [open]);
 
   // Escape-Taste + Scroll-Lock

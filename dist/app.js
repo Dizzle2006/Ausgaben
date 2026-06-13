@@ -3748,7 +3748,8 @@ function App() {
     // 1..28, nur bei "custom"
     backupReminder: false,
     backupIntervalWeeks: 4,
-    ocrLang: "deu+eng",
+    ocrLang: "deu",
+    // Einzelsprache statt "deu+eng" — etwa 2x schnellere OCR
     monthEndReminder: false,
     budgetWarning: false,
     budgetWarnPct: 80,
